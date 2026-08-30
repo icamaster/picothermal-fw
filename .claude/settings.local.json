@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cargo --version)",
+      "PowerShell(rustup --version)",
+      "PowerShell(rustup target list --installed)",
+      "PowerShell(just --version)",
+      "PowerShell(probe-rs --version)",
+      "PowerShell(git init)",
+      "PowerShell(winget install --id Casey.Just --accept-source-agreements --accept-package-agreements)",
+      "PowerShell(cargo add embassy-executor --features platform-cortex-m,executor-thread,defmt)",
+      "PowerShell(cargo build --target thumbv6m-none-eabi)",
+      "PowerShell(just fmt)",
+      "PowerShell(just check)",
+      "PowerShell(New-Item -ItemType Directory -Force crates\\\\thermal-core\\\\src\\\\lepton)",
+      "PowerShell(Move-Item crates\\\\lepton\\\\src\\\\cci.rs crates\\\\thermal-core\\\\src\\\\lepton\\\\cci.rs)",
+      "PowerShell(Move-Item crates\\\\lepton\\\\src\\\\vospi.rs crates\\\\thermal-core\\\\src\\\\lepton\\\\vospi.rs)"
+    ]
+  }
+}

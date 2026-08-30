@@ -1,0 +1,11 @@
+[package]
+name = "thermal-core"
+description = "Chip-agnostic core of the thermal camera: Lepton 3.5 driver and wire protocol"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

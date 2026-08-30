@@ -1,0 +1,7 @@
+# Default target when running cargo directly inside firmware/.
+# The justfile passes --target explicitly, so recipes don't rely on this.
+[build]
+target = "thumbv6m-none-eabi"
+
+[env]
+DEFMT_LOG = "debug"

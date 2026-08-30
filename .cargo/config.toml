@@ -1,0 +1,3 @@
+# Flash and run firmware ELFs through probe-rs (SWD).
+[target.thumbv6m-none-eabi]
+runner = "probe-rs run --chip RP2040"
