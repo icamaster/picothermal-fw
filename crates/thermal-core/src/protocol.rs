@@ -5,6 +5,12 @@
 //! endpoint, e.g. to switch the pixel format at runtime.
 //!
 //! All multi-byte fields are little-endian.
+//!
+//! A frame is header plus payload in one bulk transfer, and its total length is
+//! always 16 bytes past a multiple of the 64-byte packet size, so the transfer
+//! always ends on a short packet. Hosts can therefore ask for the largest frame
+//! they support and let the short packet terminate the read; the device never
+//! has to send a zero-length packet.
 
 /// Magic bytes opening every frame header.
 pub const MAGIC: [u8; 4] = *b"THRM";
@@ -37,7 +43,7 @@ pub enum PixelFormat {
 
 impl PixelFormat {
     /// Bytes per pixel for this format.
-    pub fn bytes_per_pixel(self) -> usize {
+    pub const fn bytes_per_pixel(self) -> usize {
         match self {
             Self::Y16 => 2,
             Self::Agc8 => 1,
@@ -135,9 +141,80 @@ impl Command {
     }
 }
 
+/// Splits one frame into bulk endpoint packets.
+///
+/// The device writes each packet as it is produced, so a frame never has to
+/// exist in RAM. Ending the transfer is the caller's only subtlety: a bulk
+/// transfer ends on a packet shorter than the endpoint's maximum, so when a
+/// frame happens to be an exact multiple of the packet size, a zero-length
+/// packet has to follow it.
+pub struct Packetizer {
+    header: [u8; FrameHeader::LEN],
+    payload_len: usize,
+    packet_size: usize,
+    sent: usize,
+    started: bool,
+    zlp_pending: bool,
+}
+
+impl Packetizer {
+    /// Starts packetizing the frame described by `header`.
+    ///
+    /// Panics if `packet_size` cannot hold a [`FrameHeader`].
+    pub fn new(header: FrameHeader, packet_size: usize) -> Self {
+        assert!(packet_size >= FrameHeader::LEN);
+        let payload_len = header.payload_len();
+        Self {
+            header: header.to_bytes(),
+            payload_len,
+            packet_size,
+            sent: 0,
+            started: false,
+            zlp_pending: (FrameHeader::LEN + payload_len).is_multiple_of(packet_size),
+        }
+    }
+
+    /// Writes the next packet into `buf` and returns its length, or `None` once
+    /// the frame is complete.
+    ///
+    /// `fill` is handed the payload offset to write from and the slice to write
+    /// into, so the payload can be generated or copied on demand.
+    pub fn next_packet<F>(&mut self, buf: &mut [u8], fill: F) -> Option<usize>
+    where
+        F: FnOnce(usize, &mut [u8]),
+    {
+        let capacity = buf.len().min(self.packet_size);
+        assert!(capacity >= FrameHeader::LEN);
+
+        if !self.started {
+            self.started = true;
+            buf[..FrameHeader::LEN].copy_from_slice(&self.header);
+            let len = (capacity - FrameHeader::LEN).min(self.payload_len);
+            fill(0, &mut buf[FrameHeader::LEN..FrameHeader::LEN + len]);
+            self.sent = len;
+            return Some(FrameHeader::LEN + len);
+        }
+
+        if self.sent < self.payload_len {
+            let len = capacity.min(self.payload_len - self.sent);
+            fill(self.sent, &mut buf[..len]);
+            self.sent += len;
+            return Some(len);
+        }
+
+        if self.zlp_pending {
+            self.zlp_pending = false;
+            return Some(0);
+        }
+
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Command, Error, FrameHeader, PixelFormat, VERSION};
+    use super::{Command, Error, FrameHeader, Packetizer, PixelFormat, VERSION};
+    use crate::frame::{self, TestPattern};
 
     fn lepton_header() -> FrameHeader {
         FrameHeader {
@@ -205,5 +282,119 @@ mod tests {
         assert_eq!(Command::from_bytes(&[0x01]), Err(Error::TooShort));
         assert_eq!(Command::from_bytes(&[0x01, 0xFF]), Err(Error::BadValue));
         assert_eq!(Command::from_bytes(&[0x7F, 0x00]), Err(Error::BadValue));
+    }
+
+    /// Largest transfer the real geometry produces, and the packet count that
+    /// needs, so the mock host can work from fixed buffers like the device does.
+    const MAX_TRANSFER: usize = FrameHeader::LEN + frame::PIXELS * 2;
+    const MAX_PACKETS: usize = MAX_TRANSFER / 64 + 2;
+
+    /// Stands in for a host: consumes packets the way a bulk transfer does,
+    /// stopping at the first packet shorter than the endpoint maximum.
+    struct MockHost {
+        packet_sizes: [usize; MAX_PACKETS],
+        packets: usize,
+        bytes: [u8; MAX_TRANSFER],
+        len: usize,
+    }
+
+    impl MockHost {
+        fn drain(
+            packetizer: &mut Packetizer,
+            packet_size: usize,
+            pattern: &TestPattern,
+            format: PixelFormat,
+        ) -> Self {
+            let mut host = MockHost {
+                packet_sizes: [0; MAX_PACKETS],
+                packets: 0,
+                bytes: [0; MAX_TRANSFER],
+                len: 0,
+            };
+            let mut buf = [0u8; 64];
+
+            while let Some(len) = packetizer.next_packet(&mut buf[..packet_size], |offset, dst| {
+                pattern.fill(format, offset, dst)
+            }) {
+                host.packet_sizes[host.packets] = len;
+                host.packets += 1;
+                host.bytes[host.len..host.len + len].copy_from_slice(&buf[..len]);
+                host.len += len;
+                if len < packet_size {
+                    break;
+                }
+            }
+            host
+        }
+    }
+
+    #[test]
+    fn mock_host_reassembles_a_frame() {
+        const PACKET: usize = 64;
+
+        for format in [PixelFormat::Y16, PixelFormat::Agc8] {
+            let pattern = TestPattern::new();
+            let header = FrameHeader {
+                seq: 7,
+                width: frame::WIDTH as u16,
+                height: frame::HEIGHT as u16,
+                format,
+            };
+            let mut packetizer = Packetizer::new(header, PACKET);
+            let host = MockHost::drain(&mut packetizer, PACKET, &pattern, format);
+
+            // The host sees exactly one frame: a valid header, then a payload
+            // identical to what the source would have rendered in one go.
+            assert_eq!(FrameHeader::from_bytes(&host.bytes).unwrap(), header);
+            assert_eq!(host.len, FrameHeader::LEN + header.payload_len());
+
+            let mut expected = [0u8; MAX_TRANSFER];
+            let payload_len = header.payload_len();
+            pattern.fill(format, 0, &mut expected[..payload_len]);
+            assert_eq!(
+                host.bytes[FrameHeader::LEN..host.len],
+                expected[..payload_len]
+            );
+
+            // Every packet is full except the last, which is what ends the
+            // transfer on the host side.
+            let sizes = &host.packet_sizes[..host.packets];
+            let (last, rest) = sizes.split_last().unwrap();
+            assert!(rest.iter().all(|&len| len == PACKET));
+            assert!(*last < PACKET);
+        }
+    }
+
+    #[test]
+    fn a_frame_that_fills_its_last_packet_ends_with_a_zero_length_packet() {
+        const PACKET: usize = 64;
+
+        // 24 x 2 pixels of Agc8 is 48 payload bytes, so header plus payload is
+        // exactly one packet and the transfer needs a ZLP to terminate.
+        let header = FrameHeader {
+            seq: 0,
+            width: 24,
+            height: 2,
+            format: PixelFormat::Agc8,
+        };
+        assert_eq!(FrameHeader::LEN + header.payload_len(), PACKET);
+
+        let mut packetizer = Packetizer::new(header, PACKET);
+        let mut buf = [0u8; PACKET];
+        let mut sizes = [0usize; 4];
+        let mut count = 0;
+        while let Some(len) = packetizer.next_packet(&mut buf, |_, dst| dst.fill(0)) {
+            sizes[count] = len;
+            count += 1;
+        }
+        assert_eq!(&sizes[..count], &[PACKET, 0]);
+    }
+
+    #[test]
+    fn the_real_geometry_never_needs_a_zero_length_packet() {
+        for format in [PixelFormat::Y16, PixelFormat::Agc8] {
+            let total = FrameHeader::LEN + frame::payload_len(format);
+            assert_ne!(total % 64, 0);
+        }
     }
 }

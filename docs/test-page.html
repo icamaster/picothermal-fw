@@ -1,0 +1,118 @@
+<!doctype html>
+<!--
+  Throwaway WebUSB test page for bring-up. Serve it over localhost rather than
+  opening the file directly, since WebUSB needs a secure context:
+      python -m http.server 8000 --directory docs
+  then open http://localhost:8000/test-page.html in Chrome or Edge.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rust-thermal test page</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 2rem; }
+  canvas { width: 640px; height: 480px; image-rendering: pixelated; border: 1px solid #888; display: block; margin: 1rem 0; }
+  button { font: inherit; padding: .4rem .8rem; margin-right: .5rem; }
+  #stats { font-variant-numeric: tabular-nums; white-space: pre; }
+</style>
+</head>
+<body>
+
+<h1>rust-thermal</h1>
+<button id="connect">Connect</button>
+<button id="y16" disabled>Y16 radiometric</button>
+<button id="agc8" disabled>AGC 8-bit</button>
+<canvas id="view" width="160" height="120"></canvas>
+<div id="stats">not connected</div>
+
+<script>
+const VID = 0x1209, PID = 0x0001;
+const WIDTH = 160, HEIGHT = 120, HEADER_LEN = 16;
+const MAX_TRANSFER = HEADER_LEN + WIDTH * HEIGHT * 2;
+const MAGIC = 'THRM';
+
+const canvas = document.getElementById('view');
+const ctx = canvas.getContext('2d');
+const stats = document.getElementById('stats');
+const image = ctx.createImageData(WIDTH, HEIGHT);
+
+let device, epIn, epOut;
+let frames = 0, dropped = 0, lastSeq = null, since = performance.now();
+
+document.getElementById('connect').onclick = async () => {
+  device = await navigator.usb.requestDevice({ filters: [{ vendorId: VID, productId: PID }] });
+  await device.open();
+  if (device.configuration === null) await device.selectConfiguration(1);
+  const iface = device.configuration.interfaces[0];
+  await device.claimInterface(iface.interfaceNumber);
+
+  // Endpoint numbers are assigned by the device, so read them off the
+  // descriptor instead of assuming EP1.
+  for (const ep of iface.alternate.endpoints) {
+    if (ep.direction === 'in') epIn = ep.endpointNumber;
+    if (ep.direction === 'out') epOut = ep.endpointNumber;
+  }
+
+  document.getElementById('y16').disabled = false;
+  document.getElementById('agc8').disabled = false;
+  stream();
+};
+
+const setFormat = (value) => () => device.transferOut(epOut, new Uint8Array([0x01, value]));
+document.getElementById('y16').onclick = setFormat(0);
+document.getElementById('agc8').onclick = setFormat(1);
+
+async function stream() {
+  for (;;) {
+    const result = await device.transferIn(epIn, MAX_TRANSFER);
+    if (result.status !== 'ok') { stats.textContent = `transfer ${result.status}`; return; }
+    if (result.data.byteLength >= HEADER_LEN) draw(result.data);
+  }
+}
+
+function draw(view) {
+  const magic = String.fromCharCode(...new Uint8Array(view.buffer, 0, 4));
+  if (magic !== MAGIC) { stats.textContent = `bad magic ${magic}`; return; }
+
+  const format = view.getUint8(5);
+  const width = view.getUint16(6, true), height = view.getUint16(8, true);
+  const seq = view.getUint32(10, true);
+  const pixels = width * height;
+  const payload = new DataView(view.buffer, HEADER_LEN);
+
+  // Y16 is centikelvin, so stretch the frame's own range to full scale;
+  // AGC frames are already 8-bit display values.
+  let gray;
+  if (format === 0) {
+    const raw = new Uint16Array(pixels);
+    for (let i = 0; i < pixels; i++) raw[i] = payload.getUint16(i * 2, true);
+    let lo = Infinity, hi = -Infinity;
+    for (const v of raw) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    const span = Math.max(hi - lo, 1);
+    gray = Uint8Array.from(raw, (v) => ((v - lo) * 255) / span);
+  } else {
+    gray = new Uint8Array(view.buffer, HEADER_LEN, pixels);
+  }
+
+  for (let i = 0; i < pixels; i++) {
+    image.data[i * 4] = image.data[i * 4 + 1] = image.data[i * 4 + 2] = gray[i];
+    image.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(image, 0, 0);
+
+  if (lastSeq !== null && seq !== ((lastSeq + 1) >>> 0)) dropped++;
+  lastSeq = seq;
+  frames++;
+
+  const elapsed = (performance.now() - since) / 1000;
+  if (elapsed >= 1) {
+    stats.textContent =
+      `${(frames / elapsed).toFixed(1)} fps   seq ${seq}   dropped ${dropped}   ` +
+      `${format === 0 ? 'Y16' : 'AGC8'} ${width}x${height}`;
+    frames = 0;
+    since = performance.now();
+  }
+}
+</script>
+</body>
+</html>

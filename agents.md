@@ -28,7 +28,8 @@ Written in embedded Rust (`no_std`, `heapless`, zero heap) on [embassy](https://
 
 | Path | What it is |
 | --- | --- |
-| `crates/thermal-core/` | Host workspace member. `no_std`, chip-agnostic, host-testable. `lepton::{cci,vospi}` (driver) and `protocol` (WebUSB wire format). |
+| `crates/thermal-core/` | Host workspace member. `no_std`, chip-agnostic, host-testable. `lepton::{cci,vospi}` (driver), `protocol` (WebUSB wire format) and `frame` (geometry plus the synthetic `TestPattern` source). |
+| `docs/` | Notes not needed to work on the current milestone, plus `test-page.html`, the throwaway WebUSB host page. |
 | `firmware/` | RP2040 binary, its own workspace (excluded from the root one) so cross-compilation to `thumbv6m-none-eabi` never shares a build cache or feature unification with host crates. |
 
 Library code stays in one crate. Do not add new lib crates without asking - the maintainer prefers fewer packages.
@@ -52,7 +53,8 @@ Recipes are direct program invocations only - no shell pipelines, no bash or Pow
 | Lepton SDA | GPIO6 | I2C1 SDA |
 | Lepton SCL | GPIO7 | I2C1 SCL |
 | Lepton VSYNC | GPIO8 | GPIO input, interrupt on edge |
-| Lepton RESET_L and PWR_DWN_L | GPIO25 | GPIO output, both tied to this one pin |
+| Lepton RESET_L | GPIO24 | GPIO output, active low |
+| Lepton PWR_DWN_L | GPIO25 | GPIO output, active low |
 | LED | GPIO10 | GPIO output |
 | Switch (active low) | GPIO11 | GPIO input, needs internal pull-up |
 
@@ -60,7 +62,7 @@ Notes that follow from this map:
 
 - The camera lands exactly on the native peripherals: GPIO0-3 are SPI0 `MisoPin`/`CsPin`/`ClkPin`/`MosiPin` and GPIO6-7 are I2C1 `SdaPin`/`SclPin` in `embassy-rp`, so no bit-banging and no PIO needed for either bus.
 - VoSPI is read-only - the Lepton never reads MOSI - so the SPI can be opened rx-only and GPIO3 left unused.
-- RESET_L and PWR_DWN_L share GPIO25, so the two cannot be staggered. The datasheet's power-up sequence releases power-down first and reset after; here both release together. Assume that works, but if the camera fails to boot reliably, suspect this before suspecting the driver.
+- RESET_L and PWR_DWN_L are on separate pins, so the datasheet power-up sequence can be followed as written: release PWR_DWN_L, wait, then release RESET_L.
 
 ## Debug setup (verified working)
 
@@ -76,7 +78,8 @@ To tell transport from target-side problems: `RUST_LOG=probe_rs=debug probe-rs r
 
 ## Design decisions (locked in)
 
-- WebUSB vendor class, not a fork. `embassy-usb` already has WebUSB BOS and MS OS 2.0 descriptor support, so no embassy fork is needed. The streaming class itself is custom (bulk IN video, bulk OUT commands).
+- WebUSB vendor class, not a fork. `embassy-usb` supplies the MS OS 2.0 descriptor machinery, so no embassy fork is needed. The streaming class itself is custom (bulk IN video, bulk OUT commands).
+- The WebUSB BOS platform capability is written by hand in `firmware/src/usb.rs` rather than via `embassy_usb::class::web_usb`. That class builds its own endpoint-less interface, which would leave a second vendor interface on the device that no driver binds to.
 - Runtime-selectable pixel format: Y16 radiometric (TLinear, centikelvin) or AGC 8-bit grayscale, switched by `protocol::Command::SetPixelFormat`.
 - `lepton_rs` was evaluated and rejected: stale (last update 2024-07), blocking `embedded-hal` traits, CCI-only, no Lepton 3.x VoSPI. Useful only as a CCI reference.
 - Planned runtime split: core1 owns VoSPI capture (timing-critical, desync risk), core0 runs the embassy executor and USB; double-buffered frames (~77 KB).
@@ -92,13 +95,11 @@ Little-endian. Video is a 16-byte `FrameHeader` (`"THRM"` magic, version, format
 - [x] M2 (2026-07-21) - Firmware flashes and runs on real hardware; defmt heartbeat over RTT. `firmware/src/main.rs` is still a blink and heartbeat skeleton.
 - [ ] M3 - CCI (I2C): `Cci<I2c>` async driver - poll BUSY in `REG_STATUS`, get/set/run commands, boot handshake, VSYNC enable, AGC and TLinear control. See the `TODO(cci)` in `crates/thermal-core/src/lepton/cci.rs`.
 - [ ] M4 - VoSPI (SPI): sync state machine (idle -> resync backoff -> streaming), CRC-16/CCITT validation, segment and frame assembly. See the `TODO(vospi)` in `crates/thermal-core/src/lepton/vospi.rs`.
-- [ ] M5 - WebUSB: embassy-usb vendor class, bulk streaming, MS OS 2.0.
-- [ ] M6 - Mock Lepton and end-to-end host tests.
+- [ ] M5 - WebUSB: vendor class, bulk streaming and MS OS 2.0 are written (`firmware/src/usb.rs`) and stream `thermal_core::frame::TestPattern` instead of a camera. The packetizing is `protocol::Packetizer`, kept in thermal-core so a mock host can drive it in `just test`; the firmware loop only pushes packets onto the endpoint. Builds and the wire format is host-tested, but nothing has enumerated on hardware yet - `docs/test-page.html` is the throwaway host page for that test.
+- [ ] M6 - Mock Lepton and end-to-end host tests. The frame path is already covered: `TestPattern` as the source and the `MockHost` in `protocol`'s tests as the sink. What is not covered on the host is the USB stack itself - descriptors, enumeration, MS OS 2.0 - which would need a mock `embassy_usb::driver::Driver` and moving the descriptor building out of `firmware/`.
 - [ ] M7 - UVC: a custom UVC class written on top of `embassy-usb`, so the camera also enumerates as a standard webcam alongside WebUSB. Design notes, open questions and the host-format constraint live in [docs/uvc.md](docs/uvc.md); read that only when picking up M7.
 
 M3 and M4 are unblocked as of 2026-09-02: the pin map above is the real one from the PCB.
-
-Nothing is committed yet - `master` has zero commits and everything is untracked.
 
 ## Coding conventions
 
