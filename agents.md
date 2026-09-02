@@ -14,7 +14,7 @@ You are an expert Rust programmer. You write safe, efficient, maintainable, and 
 
 Firmware for a custom PCB: RP2040 + FLIR Lepton 3.5 + USB-C. It turns the Lepton into a plug-and-play thermal camera that needs no drivers installed - the host is a web app talking WebUSB.
 
-Written in embedded Rust (`no_std`, `heapless`, zero heap) on [embassy](https://embassy.dev), pinned to stable Rust.
+Written in embedded Rust (`no_std`, `heapless`, zero heap) on [embassy](https://embassy.dev). The toolchain is pinned to an exact stable release in `rust-toolchain.toml` (currently 1.96.1) so every machine and CI run uses the same compiler; bump it deliberately and rerun `just check`, do not switch back to a floating `stable`.
 
 ## Goals
 
@@ -39,9 +39,31 @@ Library code stays in one crate. Do not add new lib crates without asking - the 
 
 Recipes are direct program invocations only - no shell pipelines, no bash or PowerShell scripts (`windows-shell := ["cmd.exe", "/c"]`). Non-trivial logic belongs in a Rust `xtask`, not a script.
 
-## Hardware and debug setup (verified working)
+## Board
 
-- LED on GPIO10, 12 MHz crystal.
+12 MHz crystal. Pin map of the custom PCB:
+
+| Signal | Pin | Peripheral |
+| --- | --- | --- |
+| Lepton MISO | GPIO0 | SPI0 RX |
+| Lepton CS | GPIO1 | SPI0 CSn |
+| Lepton SCLK | GPIO2 | SPI0 SCK |
+| Lepton MOSI | GPIO3 | SPI0 TX |
+| Lepton SDA | GPIO6 | I2C1 SDA |
+| Lepton SCL | GPIO7 | I2C1 SCL |
+| Lepton VSYNC | GPIO8 | GPIO input, interrupt on edge |
+| Lepton RESET_L and PWR_DWN_L | GPIO25 | GPIO output, both tied to this one pin |
+| LED | GPIO10 | GPIO output |
+| Switch (active low) | GPIO11 | GPIO input, needs internal pull-up |
+
+Notes that follow from this map:
+
+- The camera lands exactly on the native peripherals: GPIO0-3 are SPI0 `MisoPin`/`CsPin`/`ClkPin`/`MosiPin` and GPIO6-7 are I2C1 `SdaPin`/`SclPin` in `embassy-rp`, so no bit-banging and no PIO needed for either bus.
+- VoSPI is read-only - the Lepton never reads MOSI - so the SPI can be opened rx-only and GPIO3 left unused.
+- RESET_L and PWR_DWN_L share GPIO25, so the two cannot be staggered. The datasheet's power-up sequence releases power-down first and reset after; here both release together. Assume that works, but if the camera fails to boot reliably, suspect this before suspecting the driver.
+
+## Debug setup (verified working)
+
 - Debug is RTT-only: `defmt-rtt` and `probe-rs` over SWD. There is deliberately no USB CDC/serial - all USB bandwidth goes to video, and the board has SWD pads plus a probe on hand.
 - Probe: CMSIS-DAP "debugprobe on Pico" (USB `2e8a:000c`), probe-rs 0.31 from `cargo install probe-rs-tools`. On Windows the probe must be bound to WinUSB with Zadig. Runner is plain `probe-rs run --chip RP2040`.
 - `embassy-rp` supplies its own BOOT2 - never add a manual `rp2040-boot2`, it collides.
@@ -74,7 +96,7 @@ Little-endian. Video is a 16-byte `FrameHeader` (`"THRM"` magic, version, format
 - [ ] M6 - Mock Lepton and end-to-end host tests.
 - [ ] M7 - UVC: a custom UVC class written on top of `embassy-usb`, so the camera also enumerates as a standard webcam alongside WebUSB. Design notes, open questions and the host-format constraint live in [docs/uvc.md](docs/uvc.md); read that only when picking up M7.
 
-Blocker for M3 and M4: the PCB pinout is still unknown beyond the GPIO10 LED. Needed: SPI (SCK/MISO/CS), I2C (SDA/SCL), VSYNC, and any power-enable or reset pins. Ask rather than guessing.
+M3 and M4 are unblocked as of 2026-09-02: the pin map above is the real one from the PCB.
 
 Nothing is committed yet - `master` has zero commits and everything is untracked.
 
@@ -103,6 +125,15 @@ Nothing is committed yet - `master` has zero commits and everything is untracked
 
 - Document all public APIs using a concise summary, followed by a blank line, then concise details about the API or no details at all where appropriate.
 - Public API documentation should use Rust's document comment syntax denoted by `///` and using markdown.
+
+### Comments
+
+Applies to every file, not just Rust: `.toml`, the justfile and config files too.
+
+- Comment the why, never the what. If the line already says what it does - a pinned version, an obvious assignment - adding prose that restates it is noise.
+- Do comment a non-obvious choice: a hardware quirk, a datasheet or spec requirement, a workaround, an ordering or timing constraint, a deliberate deviation from the obvious approach. Cite the source (datasheet section, spec, erratum, issue) when it helps the next reader verify it.
+- Prefer one comment that explains a real trap over several that narrate the code. The `DEFMT_LOG` note in the justfile is the model: it exists because the behaviour is genuinely surprising and cost real time.
+- Do not restate values or state that lives next to the comment, since it drifts as soon as one side changes.
 
 ### General
 
