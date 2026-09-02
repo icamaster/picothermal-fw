@@ -1,9 +1,6 @@
 # rust-thermal
 
-Plug-and-play USB thermal camera: RP2040 + FLIR Lepton 3.5, embedded Rust
-firmware built on [embassy](https://embassy.dev). Streams raw radiometric
-video over WebUSB with no drivers to install (MS OS 2.0 descriptors bind
-WinUSB automatically on Windows).
+Plug-and-play USB thermal camera: RP2040 + FLIR Lepton 3.5, embedded Rust firmware built on [embassy](https://embassy.dev). Streams raw radiometric video over WebUSB with no drivers to install (MS OS 2.0 descriptors bind WinUSB automatically on Windows).
 
 ## Layout
 
@@ -16,12 +13,9 @@ WinUSB automatically on Windows).
 
 Works the same on Windows and Linux. You need:
 
-1. [rustup](https://rustup.rs) — the pinned stable toolchain and the
-   `thumbv6m-none-eabi` target install automatically on first build.
-2. [just](https://github.com/casey/just) — task runner:
-   `winget install Casey.Just` or `cargo install just`.
-3. [probe-rs](https://probe.rs/docs/getting-started/installation/) — only
-   needed to flash/debug real hardware over SWD: `cargo install probe-rs-tools`.
+1. [rustup](https://rustup.rs) - the pinned stable toolchain and the `thumbv6m-none-eabi` target install automatically on first build.
+2. [just](https://github.com/casey/just) - task runner: `winget install Casey.Just` or `cargo install just`.
+3. [probe-rs](https://probe.rs/docs/getting-started/installation/) - only needed to flash/debug real hardware over SWD: `cargo install probe-rs-tools`.
 
 ## Commands
 
@@ -36,7 +30,8 @@ Works the same on Windows and Linux. You need:
 
 ## Debugging
 
-Logging is `defmt` over RTT through the SWD probe (`just run`). Step
-debugging works with `probe-rs` through VS Code's Debugger extension or
-`probe-rs gdb`. There is intentionally no USB serial console — all USB
-bandwidth goes to video.
+Logging is `defmt` over RTT through the SWD probe (`just run`). Step debugging works with `probe-rs` through VS Code's Debugger extension or `probe-rs gdb`. There is intentionally no USB serial console - all USB bandwidth goes to video.
+
+## Contributing
+
+[AGENTS.md](agents.md) holds the project context: goals, layout rationale, hardware and debug setup, locked-in design decisions, roadmap, and coding conventions. Read it before making changes, whether you are a human or an agent.
