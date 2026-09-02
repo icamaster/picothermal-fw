@@ -15,3 +15,6 @@
 pub mod frame;
 pub mod lepton;
 pub mod protocol;
+
+#[cfg(test)]
+mod test_util;

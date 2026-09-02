@@ -28,7 +28,7 @@ Written in embedded Rust (`no_std`, `heapless`, zero heap) on [embassy](https://
 
 | Path | What it is |
 | --- | --- |
-| `crates/thermal-core/` | Host workspace member. `no_std`, chip-agnostic, host-testable. `lepton::{cci,vospi}` (driver), `protocol` (WebUSB wire format) and `frame` (geometry plus the synthetic `TestPattern` source). |
+| `crates/thermal-core/` | Host workspace member. `no_std`, chip-agnostic, host-testable. `lepton::{cci,power,vospi,mock}` (driver plus mocks for host tests), `protocol` (WebUSB wire format) and `frame` (geometry plus the synthetic `TestPattern` source). |
 | `docs/` | Notes not needed to work on the current milestone, plus `test-page.html`, the throwaway WebUSB host page. |
 | `firmware/` | RP2040 binary, its own workspace (excluded from the root one) so cross-compilation to `thumbv6m-none-eabi` never shares a build cache or feature unification with host crates. |
 
@@ -93,8 +93,8 @@ Little-endian. Video is a 16-byte `FrameHeader` (`"THRM"` magic, version, format
 
 - [x] M1 - Workspace, `just` tooling, protocol module with host tests.
 - [x] M2 (2026-07-21) - Firmware flashes and runs on real hardware; defmt heartbeat over RTT. `firmware/src/main.rs` is still a blink and heartbeat skeleton.
-- [ ] M3 - CCI (I2C): `Cci<I2c>` async driver - poll BUSY in `REG_STATUS`, get/set/run commands, boot handshake, VSYNC enable, AGC and TLinear control. See the `TODO(cci)` in `crates/thermal-core/src/lepton/cci.rs`.
-- [ ] M4 - VoSPI (SPI): sync state machine (idle -> resync backoff -> streaming), CRC-16/CCITT validation, segment and frame assembly. See the `TODO(vospi)` in `crates/thermal-core/src/lepton/vospi.rs`.
+- [ ] M3 - CCI (I2C): `Cci` driver is written and host-tested against `lepton::mock::MockCamera` - busy polling, boot handshake, get/set/run, ping, serial number, FPA temperature, AGC, TLinear and VSYNC. Not run against hardware, and the command IDs are unverified: see the `TODO(cci)` in `crates/thermal-core/src/lepton/cci.rs`. `lepton::power::Power` does the RESET_L and PWR_DWN_L sequence over `embedded_hal::digital::OutputPin`, asserted against a recorded trace of pin and delay events.
+- [ ] M4 - VoSPI (SPI): `vospi::Assembler` is the protocol as a packet state machine - sync on a frame boundary, CRC-16/CCITT validation, discard and invalid-segment handling, desync detection, and assembly into a little-endian frame buffer. Host-tested with synthetic packets. What is left is the SPI reader that feeds it on the RP2040, and pacing capture off VSYNC.
 - [ ] M5 - WebUSB: vendor class, bulk streaming and MS OS 2.0 are written (`firmware/src/usb.rs`) and stream `thermal_core::frame::TestPattern` instead of a camera. The packetizing is `protocol::Packetizer`, kept in thermal-core so a mock host can drive it in `just test`; the firmware loop only pushes packets onto the endpoint. Builds and the wire format is host-tested, but nothing has enumerated on hardware yet - `docs/test-page.html` is the throwaway host page for that test.
 - [ ] M6 - Mock Lepton and end-to-end host tests. The frame path is already covered: `TestPattern` as the source and the `MockHost` in `protocol`'s tests as the sink. What is not covered on the host is the USB stack itself - descriptors, enumeration, MS OS 2.0 - which would need a mock `embassy_usb::driver::Driver` and moving the descriptor building out of `firmware/`.
 - [ ] M7 - UVC: a custom UVC class written on top of `embassy-usb`, so the camera also enumerates as a standard webcam alongside WebUSB. Design notes, open questions and the host-format constraint live in [docs/uvc.md](docs/uvc.md); read that only when picking up M7.
