@@ -37,7 +37,7 @@ const VENDOR_CODE: u8 = 0x01;
 
 /// Identifies the device to WinUSB. Hosts may filter on it; changing it after a
 /// machine has enumerated the device means clearing that machine's driver cache.
-const DEVICE_INTERFACE_GUID: &str = "{4F1B2C3D-5E6A-4B7C-8D9E-0A1B2C3D4E5F}";
+const DEVICE_INTERFACE_GUID: &str = "{67A9617C-EDAF-43A2-9ED0-1D4D3A882660}";
 
 /// Streamed pixel format, owned here because the command loop writes it and the
 /// stream loop reads it. Only load and store are used: thumbv6m has no atomic
@@ -85,7 +85,7 @@ pub fn build<'d>(
 ) -> (embassy_usb::UsbDevice<'d, Driver<'d, USB>>, Endpoints<'d>) {
     let mut config = Config::new(VID, PID);
     config.device_release = DEVICE_RELEASE;
-    config.manufacturer = Some("rust-thermal");
+    config.manufacturer = Some("picothermal");
     config.product = Some("Lepton 3.5 thermal camera");
     config.serial_number = Some("0001");
     config.max_power = 250;

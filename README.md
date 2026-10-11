@@ -1,4 +1,6 @@
-# rust-thermal
+# picothermal
+
+![desktop screenshot](docs\screenshot-desktop.png)
 
 Plug-and-play USB thermal camera: RP2040 + FLIR Lepton 3.5, embedded Rust firmware built on [embassy](https://embassy.dev). Streams raw radiometric video over WebUSB with no drivers to install (MS OS 2.0 descriptors bind WinUSB automatically on Windows).
 
@@ -26,11 +28,22 @@ Works the same on Windows and Linux. You need:
 | `just test` | Host-side tests (driver + protocol, no hardware needed) |
 | `just build` | Cross-compile the firmware |
 | `just run` | Flash via SWD probe and stream defmt logs (RTT) |
+| `just flash` | Flash via SWD probe and leave it running, without logs |
 | `just check` | Everything CI would run: format check, lint, test, build |
+
+## USB identifiers
+
+The firmware currently uses VID `0x1209` / PID `0x0001` (`VID` and `PID` in `firmware/src/usb.rs`, and again in `docs/test-page.html`, which only lists devices matching them), which is [pid.codes](https://pid.codes)' shared test ID, meant for prototypes only. Any device built from this project would clash with every other project using it, so it needs its own PID before boards are shared or distributed. pid.codes allocates PIDs under VID `0x1209` to open-source hardware for free.
+
+Windows caches the driver it chose per VID, PID and device release, so after changing the ID, the device is set up fresh on the first plug-in.
 
 ## Debugging
 
 Logging is `defmt` over RTT through the SWD probe (`just run`). Step debugging works with `probe-rs` through VS Code's Debugger extension or `probe-rs gdb`. There is intentionally no USB serial console - all USB bandwidth goes to video.
+
+## License
+
+[MIT](LICENSE).
 
 ## Contributing
 

@@ -76,7 +76,7 @@ static CORE1_EXECUTOR: StaticCell<Executor> = StaticCell::new();
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
-    info!("rust-thermal firmware booted");
+    info!("picothermal firmware booted");
 
     let channel = CHANNEL.init(Channel::new(FRAMES.take()));
     let (sender, mut receiver) = channel.split();

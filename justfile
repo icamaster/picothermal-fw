@@ -46,5 +46,9 @@ build-release:
 run:
     cargo run --manifest-path firmware/Cargo.toml --target {{firmware_target}} --release
 
+# Flash the release firmware over SWD and leave it running, without logging
+flash:
+    cargo flash --manifest-path firmware/Cargo.toml --target {{firmware_target}} --release --chip RP2040
+
 # Everything CI would check: formatting, lints, tests, firmware build
 check: fmt-check lint test build

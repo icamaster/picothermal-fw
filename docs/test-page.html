@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  WebUSB test page for the rust-thermal camera. WebUSB needs a secure context:
+  WebUSB test page for the picothermal camera. WebUSB needs a secure context:
   serve it over localhost (python -m http.server 8000 --directory docs) or
   HTTPS, then open it in Chrome or Edge, desktop or Android.
 
@@ -60,7 +60,10 @@
 <main>
   <header>
     <h1>picothermal<span class="version" id="version"></span></h1>
-    <button id="connect">Connect</button>
+    <div>
+      <button id="save" hidden disabled>Save image</button>
+      <button id="connect">Connect</button>
+    </div>
   </header>
 
   <div class="view" id="view">
@@ -443,7 +446,10 @@ $('connect').onclick = async () => {
     // is always the version actually running on the camera.
     $('version').textContent = `v${device.deviceVersionMajor}.${device.deviceVersionMinor}.${device.deviceVersionSubminor}`;
 
-    $('connect').disabled = true;
+    // Connected: Connect has nothing left to do, and saving only makes sense
+    // with a camera streaming. Both swap back if the device disconnects.
+    $('connect').hidden = true;
+    $('save').hidden = false;
     for (const el of document.querySelectorAll('#gain, #calibrate, #emissivity, #material, [data-for=emissivity]')) el.disabled = false;
     if (camera.gain !== 0) sendGain();
     if (camera.emissivity !== 1) sendEmissivity();
@@ -460,7 +466,8 @@ async function stream() {
       result = await device.transferIn(epIn, MAX_TRANSFER);
     } catch (err) {
       $('stats').textContent = `disconnected: ${err.message}`;
-      $('connect').disabled = false;
+      $('connect').hidden = false;
+      $('save').hidden = true;
       return;
     }
     if (result.status === 'ok' && result.data.byteLength >= HEADER_LEN) receive(result.data);
@@ -531,8 +538,12 @@ function currentRange() {
   return { lo: auto.lo, hi: auto.hi };
 }
 
+let shownRange = null;  // the range the last render used, for the saved image's legend
+
 function render() {
   const { lo, hi } = currentRange();
+  shownRange = { lo, hi };
+  $('save').disabled = false;
   const scale = 255 / (hi - lo);
   const px = image.data;
   for (let i = 0; i < celsius.length; i++) {
@@ -561,6 +572,105 @@ function render() {
     label.style.right = dx > WIDTH * 0.75 ? '12px' : 'auto';
   }
 }
+
+// Save image: the current frame redrawn off screen at 4x with its spot, the
+// temperature legend and a footer of settings, so a saved picture can still be
+// read later. Drawn by hand rather than captured from the page, which browsers
+// cannot do without a large library, and which would also miss the mirror/flip
+// transform and the positioned spot label.
+const SAVE_SCALE = 4;
+const GAIN_NAMES = ['High', 'Low', 'Auto'];
+
+function saveImage() {
+  if (!celsius || !shownRange) return;
+  const { lo, hi } = shownRange;
+  const w = WIDTH * SAVE_SCALE, h = HEIGHT * SAVE_SCALE;
+  const legendTop = h + 12, legendHeight = 16, footerTop = legendTop + legendHeight + 30;
+
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = footerTop + 48;
+  const c = out.getContext('2d');
+  c.fillStyle = '#111';
+  c.fillRect(0, 0, out.width, out.height);
+
+  // The frame, nearest-neighbour so pixels stay sharp, oriented like the screen.
+  const frame = document.createElement('canvas');
+  frame.width = WIDTH;
+  frame.height = HEIGHT;
+  frame.getContext('2d').putImageData(image, 0, 0);
+  c.imageSmoothingEnabled = false;
+  c.save();
+  c.translate(orientation.mirror ? w : 0, orientation.flip ? h : 0);
+  c.scale(orientation.mirror ? -1 : 1, orientation.flip ? -1 : 1);
+  c.drawImage(frame, 0, 0, w, h);
+  c.restore();
+
+  c.font = '15px system-ui, sans-serif';
+  c.textBaseline = 'middle';
+
+  if (spot) {
+    const x = (toDisplayX(spot.x) + 0.5) * SAVE_SCALE, y = (toDisplayY(spot.y) + 0.5) * SAVE_SCALE;
+    c.fillStyle = '#000';
+    c.fillRect(x - 13, y - 2, 26, 4);
+    c.fillRect(x - 2, y - 13, 4, 26);
+    c.fillStyle = '#fff';
+    c.fillRect(x - 12, y - 1, 24, 2);
+    c.fillRect(x - 1, y - 12, 2, 24);
+    const label = `${celsius[spot.y * WIDTH + spot.x].toFixed(1)} \u00b0C`;
+    const width = c.measureText(label).width + 10;
+    const onLeft = x + 16 + width > w;
+    const lx = onLeft ? x - 16 - width : x + 16, ly = Math.max(12, y - 22);
+    c.fillStyle = 'rgba(0,0,0,.7)';
+    c.fillRect(lx, ly - 11, width, 22);
+    c.fillStyle = '#fff';
+    c.fillText(label, lx + 5, ly);
+  }
+
+  // Legend: the colour bar the image was rendered with, and its range.
+  for (let x = 0; x < w; x++) {
+    const v = Math.round((x / (w - 1)) * 255) * 3;
+    c.fillStyle = `rgb(${lut[v]},${lut[v + 1]},${lut[v + 2]})`;
+    c.fillRect(x, legendTop, 1, legendHeight);
+  }
+  c.fillStyle = '#9a9a9a';
+  for (let i = 0; i < TICKS; i++) {
+    const t = `${(lo + ((hi - lo) * i) / (TICKS - 1)).toFixed(1)} \u00b0C`;
+    const tw = c.measureText(t).width;
+    const x = i === 0 ? 0 : i === TICKS - 1 ? w - tw : (w * i) / (TICKS - 1) - tw / 2;
+    c.fillText(t, x, legendTop + legendHeight + 14);
+  }
+
+  // Footer: what was being looked at, and how.
+  let sceneLo = Infinity, sceneHi = -Infinity;
+  for (const t of celsius) { if (t < sceneLo) sceneLo = t; if (t > sceneHi) sceneHi = t; }
+  const now = new Date();
+  const version = $('version').textContent;
+  c.fillStyle = '#e6e6e6';
+  c.fillText(`picothermal ${version}   ${now.toLocaleString()}`, 0, footerTop);
+  c.fillStyle = '#9a9a9a';
+  c.fillText(
+    `Scene ${sceneLo.toFixed(1)} to ${sceneHi.toFixed(1)} \u00b0C   ` +
+      `Emissivity ${camera.emissivity.toFixed(2)}   Gain ${GAIN_NAMES[camera.gain] ?? '?'}   ` +
+      `${isManual() ? 'Manual' : 'Auto'} range   ${$('palette').value}`,
+    0,
+    footerTop + 24,
+  );
+
+  const pad = (n) => String(n).padStart(2, '0');
+  const name = `picothermal-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-` +
+    `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.png`;
+  out.toBlob((blob) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    link.click();
+    // The click starts the download asynchronously; release the blob after.
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }, 'image/png');
+}
+$('save').onclick = saveImage;
 </script>
 </body>
 </html>
