@@ -6,7 +6,7 @@ use defmt::{info, warn};
 use embassy_futures::select::{Either, select};
 use embassy_rp::peripherals::USB;
 use embassy_rp::usb::{Driver, Endpoint, In, Out};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::zerocopy_channel::Receiver;
 use embassy_time::Timer;
 use embassy_usb::descriptor::capability_type;
@@ -136,15 +136,22 @@ pub fn build<'d>(
 
 /// How long to wait for a camera frame before falling back to the test
 /// pattern, so a board with no working camera still streams something.
-const FRAME_TIMEOUT_MS: u64 = 500;
+///
+/// It must outlast the camera's normal pauses: no frames for up to ~2 s during
+/// a flat-field correction, and up to ~4 s while the stream syncs after
+/// power-up. A shorter wait filled those pauses with test pattern frames,
+/// which the host drew as if they were the scene. It stays well under the
+/// capture watchdog, so a camera that has really stopped is still restarted.
+const FRAME_TIMEOUT_MS: u64 = 5000;
 
 /// Streams frames on the bulk IN endpoint, forever.
 pub async fn stream(
     ep: &mut Endpoint<'_, USB, In>,
-    frames: &mut Receiver<'_, NoopRawMutex, Frame>,
+    frames: &mut Receiver<'_, CriticalSectionRawMutex, Frame>,
 ) -> ! {
     let mut pattern = TestPattern::new();
     let mut fallback_seq: u32 = 0;
+    let mut on_fallback = false;
 
     loop {
         ep.wait_enabled().await;
@@ -153,6 +160,10 @@ pub async fn stream(
         loop {
             let sent = match select(frames.receive(), Timer::after_millis(FRAME_TIMEOUT_MS)).await {
                 Either::First(frame) => {
+                    if on_fallback {
+                        info!("usb: camera frames resumed");
+                        on_fallback = false;
+                    }
                     // Camera frames are always radiometric; the pixel format
                     // command only reaches the test pattern for now.
                     let flags = if frame.ffc { FrameHeader::FLAG_FFC } else { 0 };
@@ -165,6 +176,13 @@ pub async fn stream(
                     result
                 }
                 Either::Second(()) => {
+                    if !on_fallback {
+                        info!(
+                            "usb: no camera frame for {=u64} ms, sending the test pattern",
+                            FRAME_TIMEOUT_MS
+                        );
+                        on_fallback = true;
+                    }
                     let format = current_format();
                     let header = header(fallback_seq, format, 0);
                     fallback_seq = fallback_seq.wrapping_add(1);
