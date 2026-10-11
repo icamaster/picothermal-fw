@@ -3,8 +3,12 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use defmt::{info, warn};
+use embassy_futures::select::{Either, select};
 use embassy_rp::peripherals::USB;
 use embassy_rp::usb::{Driver, Endpoint, In, Out};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::zerocopy_channel::Receiver;
+use embassy_time::Timer;
 use embassy_usb::descriptor::capability_type;
 use embassy_usb::driver::Endpoint as _;
 use embassy_usb::driver::{EndpointIn, EndpointOut};
@@ -12,6 +16,8 @@ use embassy_usb::msos::{self, windows_version};
 use embassy_usb::{Builder, Config};
 use thermal_core::frame::{self, TestPattern};
 use thermal_core::protocol::{Command, FrameHeader, Packetizer, PixelFormat};
+
+use crate::Frame;
 
 /// Full-speed bulk endpoints are capped at 64 bytes per packet.
 pub const MAX_PACKET_SIZE: u16 = 64;
@@ -127,45 +133,80 @@ pub fn build<'d>(
     (builder.build(), Endpoints { video, commands })
 }
 
-/// Streams synthetic frames on the bulk IN endpoint, forever.
-pub async fn stream(ep: &mut Endpoint<'_, USB, In>) -> ! {
+/// How long to wait for a camera frame before falling back to the test
+/// pattern, so a board with no working camera still streams something.
+const FRAME_TIMEOUT_MS: u64 = 500;
+
+/// Streams frames on the bulk IN endpoint, forever.
+pub async fn stream(
+    ep: &mut Endpoint<'_, USB, In>,
+    frames: &mut Receiver<'_, NoopRawMutex, Frame>,
+) -> ! {
     let mut pattern = TestPattern::new();
-    let mut seq: u32 = 0;
+    let mut fallback_seq: u32 = 0;
 
     loop {
         ep.wait_enabled().await;
         info!("host opened the video endpoint");
 
-        while let Ok(()) = send_frame(ep, &mut pattern, seq).await {
-            seq = seq.wrapping_add(1);
-            pattern.advance();
-        }
+        loop {
+            let sent = match select(frames.receive(), Timer::after_millis(FRAME_TIMEOUT_MS)).await {
+                Either::First(frame) => {
+                    // Camera frames are always radiometric; the pixel format
+                    // command only reaches the test pattern for now.
+                    let header = header(frame.seq, PixelFormat::Y16);
+                    let result = send_frame(ep, header, |offset, dst| {
+                        dst.copy_from_slice(&frame.pixels[offset..offset + dst.len()])
+                    })
+                    .await;
+                    frames.receive_done();
+                    result
+                }
+                Either::Second(()) => {
+                    let format = current_format();
+                    let header = header(fallback_seq, format);
+                    fallback_seq = fallback_seq.wrapping_add(1);
+                    let result =
+                        send_frame(ep, header, |offset, dst| pattern.fill(format, offset, dst))
+                            .await;
+                    pattern.advance();
+                    result
+                }
+            };
 
-        info!("video endpoint closed after {} frames", seq);
+            if sent.is_err() {
+                info!("video endpoint closed");
+                break;
+            }
+        }
     }
 }
 
-/// Sends one frame: the header and payload split across 64-byte packets.
-async fn send_frame(
-    ep: &mut Endpoint<'_, USB, In>,
-    pattern: &mut TestPattern,
-    seq: u32,
-) -> Result<(), embassy_usb::driver::EndpointError> {
-    let format = current_format();
-    let header = FrameHeader {
+/// Header for a frame of the camera's geometry.
+fn header(seq: u32, format: PixelFormat) -> FrameHeader {
+    FrameHeader {
         seq,
         width: frame::WIDTH as u16,
         height: frame::HEIGHT as u16,
         format,
-    };
+    }
+}
+
+/// Sends one frame: the header and payload split across 64-byte packets.
+///
+/// `fill` is handed a payload offset and the slice to write, so the payload can
+/// come from a captured frame or be generated on the spot.
+async fn send_frame(
+    ep: &mut Endpoint<'_, USB, In>,
+    header: FrameHeader,
+    mut fill: impl FnMut(usize, &mut [u8]),
+) -> Result<(), embassy_usb::driver::EndpointError> {
     // Packetizing lives in thermal-core so the host tests can drive it; this
     // loop only moves the packets it produces onto the endpoint.
     let mut packetizer = Packetizer::new(header, MAX_PACKET_SIZE as usize);
     let mut packet = [0u8; MAX_PACKET_SIZE as usize];
 
-    while let Some(len) =
-        packetizer.next_packet(&mut packet, |offset, dst| pattern.fill(format, offset, dst))
-    {
+    while let Some(len) = packetizer.next_packet(&mut packet, &mut fill) {
         ep.write(&packet[..len]).await?;
     }
 
