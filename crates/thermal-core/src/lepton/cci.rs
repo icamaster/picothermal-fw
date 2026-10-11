@@ -13,6 +13,8 @@
 use embedded_hal_async::delay::DelayNs;
 use embedded_hal_async::i2c::I2c;
 
+use crate::protocol::GainMode;
+
 /// 7-bit I2C address of the Lepton CCI.
 pub const I2C_ADDRESS: u8 = 0x2A;
 
@@ -86,12 +88,18 @@ impl Command {
     /// State of the flat-field correction the camera runs on its own. Get
     /// only, 2 words.
     pub const SYS_FFC_STATUS: Self = Self::at(Self::SYS, 0x0044);
+    /// Runs a flat-field correction now. Run only.
+    pub const SYS_RUN_FFC: Self = Self::at(Self::SYS, 0x0040);
+    /// High, low or automatic gain. 2 words.
+    pub const SYS_GAIN_MODE: Self = Self::at(Self::SYS, 0x0048);
     /// Whether AGC is applied to the video output. 2 words.
     pub const AGC_ENABLE: Self = Self::at(Self::AGC, 0x0000);
     /// Which function the camera's GPIO3 pin serves; 5 selects VSYNC. 2 words.
     pub const OEM_GPIO_MODE: Self = Self::at(Self::OEM, 0x0054);
     /// Whether radiometry outputs TLinear centikelvin pixels. 2 words.
     pub const RAD_TLINEAR_ENABLE: Self = Self::at(Self::RAD, 0x00C0);
+    /// Radiometry scene parameters, emissivity first. 8 words.
+    pub const RAD_FLUX_LINEAR_PARAMS: Self = Self::at(Self::RAD, 0x00BC);
 
     /// A command at `offset` within `module`.
     const fn at(module: u16, offset: u16) -> Self {
@@ -249,6 +257,34 @@ impl<I2C: I2c, D: DelayNs> Cci<I2C, D> {
         self.set_enum(Command::OEM_GPIO_MODE, GPIO_MODE_VSYNC).await
     }
 
+    /// Starts a flat-field correction now.
+    ///
+    /// The camera closes its shutter as for a scheduled correction, and
+    /// [`Self::ffc_status`] reports it the same way.
+    pub async fn run_ffc(&mut self) -> Result<(), Error<I2C::Error>> {
+        self.run(Command::SYS_RUN_FFC).await
+    }
+
+    /// Selects the gain mode.
+    ///
+    /// The protocol's [`GainMode`] values are the camera's own encoding.
+    pub async fn set_gain_mode(&mut self, mode: GainMode) -> Result<(), Error<I2C::Error>> {
+        self.set_enum(Command::SYS_GAIN_MODE, mode as u32).await
+    }
+
+    /// Sets the scene emissivity, scaled so that 8192 is 1.0.
+    ///
+    /// Emissivity shares a parameter block with the background, window and
+    /// atmosphere settings, so the block is read back and only emissivity is
+    /// changed rather than overwriting the rest with guesses.
+    pub async fn set_emissivity(&mut self, scaled: u16) -> Result<(), Error<I2C::Error>> {
+        let mut params = [0u16; 8];
+        self.get(Command::RAD_FLUX_LINEAR_PARAMS, &mut params)
+            .await?;
+        params[0] = scaled;
+        self.set(Command::RAD_FLUX_LINEAR_PARAMS, &params).await
+    }
+
     /// Runs a command that takes no data and returns none.
     pub async fn run(&mut self, command: Command) -> Result<(), Error<I2C::Error>> {
         self.wait_idle().await?;
@@ -381,7 +417,7 @@ impl<I2C: I2c, D: DelayNs> Cci<I2C, D> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cci, Command, Error, FfcStatus, MAX_DATA_WORDS};
+    use super::{Cci, Command, Error, FfcStatus, GainMode, MAX_DATA_WORDS};
     use crate::lepton::mock::{MockCamera, NoDelay};
     use crate::test_util::block_on;
 
@@ -467,6 +503,36 @@ mod tests {
             block_on(cci.get(Command::AGC_ENABLE, &mut out)),
             Err(Error::DataLength)
         );
+    }
+
+    #[test]
+    fn run_ffc_issues_the_run_command() {
+        let mut cci = Cci::new(MockCamera::new(), NoDelay);
+        block_on(cci.run_ffc()).unwrap();
+        assert_eq!(cci.i2c.last_command, 0x0242);
+    }
+
+    #[test]
+    fn sets_gain_mode() {
+        let mut cci = Cci::new(MockCamera::new(), NoDelay);
+        block_on(cci.set_gain_mode(GainMode::Low)).unwrap();
+        assert_eq!(cci.i2c.last_command, 0x0249);
+        assert_eq!(cci.i2c.written_data(), &[0x0001, 0x0000]);
+    }
+
+    #[test]
+    fn set_emissivity_changes_only_emissivity() {
+        let mut camera = MockCamera::new();
+        let defaults = [8192, 29515, 8192, 29515, 8192, 29515, 0, 29515];
+        camera.stage_data(&defaults);
+        let mut cci = Cci::new(camera, NoDelay);
+
+        block_on(cci.set_emissivity(7782)).unwrap();
+
+        assert_eq!(cci.i2c.last_command, 0x4EBD);
+        let mut expected = defaults;
+        expected[0] = 7782;
+        assert_eq!(cci.i2c.written_data(), &expected);
     }
 
     #[test]

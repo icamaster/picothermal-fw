@@ -229,6 +229,13 @@ pub async fn commands(ep: &mut Endpoint<'_, USB, Out>) -> ! {
                     FORMAT.store(format as u8, Ordering::Relaxed);
                     info!("pixel format set to {}", format as u8);
                 }
+                // Everything else is for the camera, whose bus this side does
+                // not own.
+                Ok(command) => {
+                    if crate::camera::CONTROL.try_send(command).is_err() {
+                        warn!("camera busy, dropping {}", defmt::Debug2Format(&command));
+                    }
+                }
                 Err(_) => warn!("ignoring {} malformed command bytes", len),
             }
         }

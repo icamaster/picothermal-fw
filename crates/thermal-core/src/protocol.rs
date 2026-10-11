@@ -2,7 +2,7 @@
 //!
 //! Video flows over the bulk IN endpoint as frames, each preceded by a
 //! fixed-size [`FrameHeader`]. Hosts send [`Command`]s on the bulk OUT
-//! endpoint, e.g. to switch the pixel format at runtime.
+//! endpoint to configure the camera at runtime.
 //!
 //! All multi-byte fields are little-endian.
 //!
@@ -124,28 +124,84 @@ impl FrameHeader {
 }
 
 /// Commands sent by the host on the bulk OUT endpoint.
+///
+/// Every command is [`Command::LEN`] bytes: an opcode, then a little-endian
+/// 16-bit argument, which commands without one leave as zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     /// Switch the streamed pixel format starting with the next frame.
     SetPixelFormat(PixelFormat),
+    /// Select the camera's gain mode, trading temperature range for
+    /// resolution.
+    SetGainMode(GainMode),
+    /// Run a flat-field correction now instead of waiting for the camera's
+    /// own schedule.
+    RunFfc,
+    /// Set the scene emissivity used by radiometry, scaled so that 8192 is
+    /// 1.0, the camera's own representation.
+    SetEmissivity(u16),
 }
 
 impl Command {
     /// Encoded size of a command in bytes.
-    pub const LEN: usize = 2;
+    pub const LEN: usize = 3;
+
+    /// Emissivity of 1.0 in the scaled form [`Command::SetEmissivity`] uses.
+    pub const EMISSIVITY_ONE: u16 = 8192;
+
+    /// Lowest emissivity accepted, 0.01. Below that radiometry is meaningless.
+    pub const EMISSIVITY_MIN: u16 = 82;
 
     /// Encodes the command into its fixed-size wire representation.
     pub fn to_bytes(&self) -> [u8; Self::LEN] {
-        match self {
-            Self::SetPixelFormat(format) => [0x01, *format as u8],
-        }
+        let (opcode, argument) = match *self {
+            Self::SetPixelFormat(format) => (0x01, format as u16),
+            Self::SetGainMode(mode) => (0x02, mode as u16),
+            Self::RunFfc => (0x03, 0),
+            Self::SetEmissivity(scaled) => (0x04, scaled),
+        };
+        let [low, high] = argument.to_le_bytes();
+        [opcode, low, high]
     }
 
     /// Decodes a command from the start of `bytes`.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        match bytes {
-            [0x01, format, ..] => Ok(Self::SetPixelFormat(PixelFormat::from_u8(*format)?)),
-            [] | [_] => Err(Error::TooShort),
+        let [opcode, low, high, ..] = *bytes else {
+            return Err(Error::TooShort);
+        };
+        let argument = u16::from_le_bytes([low, high]);
+        let byte = || u8::try_from(argument).map_err(|_| Error::BadValue);
+
+        match opcode {
+            0x01 => Ok(Self::SetPixelFormat(PixelFormat::from_u8(byte()?)?)),
+            0x02 => Ok(Self::SetGainMode(GainMode::from_u8(byte()?)?)),
+            0x03 => Ok(Self::RunFfc),
+            0x04 if (Self::EMISSIVITY_MIN..=Self::EMISSIVITY_ONE).contains(&argument) => {
+                Ok(Self::SetEmissivity(argument))
+            }
+            _ => Err(Error::BadValue),
+        }
+    }
+}
+
+/// The camera's gain mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum GainMode {
+    /// Finest resolution, roughly -10 to 140 degrees C. The camera's default.
+    High = 0,
+    /// Extended range up to roughly 400 degrees C, at coarser resolution.
+    Low = 1,
+    /// The camera switches between the two as the scene requires.
+    Auto = 2,
+}
+
+impl GainMode {
+    fn from_u8(value: u8) -> Result<Self, Error> {
+        match value {
+            0 => Ok(Self::High),
+            1 => Ok(Self::Low),
+            2 => Ok(Self::Auto),
             _ => Err(Error::BadValue),
         }
     }
@@ -223,7 +279,7 @@ impl Packetizer {
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, Error, FrameHeader, Packetizer, PixelFormat, VERSION};
+    use super::{Command, Error, FrameHeader, GainMode, Packetizer, PixelFormat, VERSION};
     use crate::frame::{self, TestPattern};
 
     fn lepton_header() -> FrameHeader {
@@ -281,18 +337,60 @@ mod tests {
 
     #[test]
     fn command_roundtrips() {
-        for format in [PixelFormat::Y16, PixelFormat::Agc8] {
-            let cmd = Command::SetPixelFormat(format);
+        let commands = [
+            Command::SetPixelFormat(PixelFormat::Y16),
+            Command::SetPixelFormat(PixelFormat::Agc8),
+            Command::SetGainMode(GainMode::High),
+            Command::SetGainMode(GainMode::Low),
+            Command::SetGainMode(GainMode::Auto),
+            Command::RunFfc,
+            Command::SetEmissivity(Command::EMISSIVITY_MIN),
+            Command::SetEmissivity(7782),
+            Command::SetEmissivity(Command::EMISSIVITY_ONE),
+        ];
+        for cmd in commands {
             assert_eq!(Command::from_bytes(&cmd.to_bytes()), Ok(cmd));
         }
     }
 
     #[test]
+    fn command_argument_is_little_endian() {
+        assert_eq!(
+            Command::SetEmissivity(0x1234).to_bytes(),
+            [0x04, 0x34, 0x12]
+        );
+    }
+
+    #[test]
     fn command_rejects_invalid_input() {
         assert_eq!(Command::from_bytes(&[]), Err(Error::TooShort));
-        assert_eq!(Command::from_bytes(&[0x01]), Err(Error::TooShort));
-        assert_eq!(Command::from_bytes(&[0x01, 0xFF]), Err(Error::BadValue));
-        assert_eq!(Command::from_bytes(&[0x7F, 0x00]), Err(Error::BadValue));
+        assert_eq!(Command::from_bytes(&[0x01, 0x00]), Err(Error::TooShort));
+        assert_eq!(
+            Command::from_bytes(&[0x01, 0xFF, 0x00]),
+            Err(Error::BadValue)
+        );
+        assert_eq!(
+            Command::from_bytes(&[0x02, 0x03, 0x00]),
+            Err(Error::BadValue)
+        );
+        assert_eq!(
+            Command::from_bytes(&[0x7F, 0x00, 0x00]),
+            Err(Error::BadValue)
+        );
+        // Emissivity outside 0.01..=1.0.
+        assert_eq!(
+            Command::from_bytes(&[0x04, 0x00, 0x00]),
+            Err(Error::BadValue)
+        );
+        assert_eq!(
+            Command::from_bytes(&[0x04, 0x01, 0x20]),
+            Err(Error::BadValue)
+        );
+        // A byte-sized argument must not have its high byte set.
+        assert_eq!(
+            Command::from_bytes(&[0x02, 0x00, 0x01]),
+            Err(Error::BadValue)
+        );
     }
 
     /// Largest transfer the real geometry produces, and the packet count that

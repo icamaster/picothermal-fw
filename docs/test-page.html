@@ -13,18 +13,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>rust-thermal</title>
+<title>picothermal</title>
 <style>
   :root { color-scheme: dark; --fg: #e6e6e6; --muted: #9a9a9a; --panel: #1c1c1c; --line: #333; }
   body { font: 14px system-ui, sans-serif; margin: 0; padding: 1rem; background: #111; color: var(--fg); }
   main { max-width: 640px; margin: 0 auto; }
-  h1 { font-size: 1.2rem; margin: 0 0 .75rem; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .5rem; }
+  h1 { font-size: 1.2rem; margin: 0; }
   button, select, input { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: .35rem .6rem; }
   button:disabled, input:disabled { opacity: .45; }
-  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .5rem 0; }
-  .bar label { display: inline-flex; gap: .3rem; align-items: center; }
+  button[aria-pressed=true] { background: #3a3a3a; border-color: #888; }
   .stepper { display: inline-flex; align-items: center; gap: .35rem; }
-  .stepper .name { min-width: 2.2rem; }
+  .stepper .name { min-width: 2.2rem; color: var(--muted); }
   .stepper button { min-width: 44px; min-height: 44px; font-size: 1.3rem; line-height: 1; padding: 0; touch-action: manipulation; user-select: none; }
   .stepper input { width: 4.5rem; min-height: 44px; text-align: center; font-variant-numeric: tabular-nums; }
 
@@ -42,19 +42,25 @@
   .legend canvas { width: 100%; height: 14px; display: block; border: 1px solid var(--line); }
   .ticks { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; margin-top: 2px; }
 
-  #stats { font-variant-numeric: tabular-nums; color: var(--muted); white-space: pre-wrap; margin-top: .75rem; }
+  #stats { font-variant-numeric: tabular-nums; color: var(--muted); white-space: pre-wrap; margin-top: .5rem; min-height: 1.2em; }
+
+  .tabs { display: flex; margin-top: .75rem; border-bottom: 1px solid var(--line); }
+  .tabs button { flex: 1; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted); padding: .55rem 0; }
+  .tabs button[aria-selected=true] { color: var(--fg); border-bottom-color: var(--fg); }
+  .group { padding-top: .25rem; }
+  .row { display: grid; grid-template-columns: 6rem 1fr; gap: .5rem; align-items: center; padding: .2rem 0; }
+  .row > .label { color: var(--muted); }
+  .ctl { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  .ctl label { display: inline-flex; gap: .3rem; align-items: center; }
+  .hint { color: var(--muted); font-size: 12px; }
 </style>
 </head>
 <body>
 <main>
-  <h1>rust-thermal</h1>
-
-  <div class="bar">
+  <header>
+    <h1>picothermal</h1>
     <button id="connect">Connect</button>
-    <label>Colours
-      <select id="palette"></select>
-    </label>
-  </div>
+  </header>
 
   <div class="view" id="view">
     <canvas id="image" width="160" height="120"></canvas>
@@ -67,33 +73,115 @@
     <div class="ticks" id="ticks"></div>
   </div>
 
-  <div class="bar">
-    <label><input type="radio" name="range" value="auto" checked> Auto range</label>
-    <label><input type="radio" name="range" value="manual"> Manual</label>
-  </div>
-  <div class="bar">
-    <div class="stepper">
-      <span class="name">Min</span>
-      <button data-for="min" data-step="-0.5" aria-label="Lower minimum" disabled>&minus;</button>
-      <input id="min" type="text" inputmode="decimal" disabled>
-      <button data-for="min" data-step="0.5" aria-label="Raise minimum" disabled>+</button>
-      <span>&deg;C</span>
-    </div>
-    <div class="stepper">
-      <span class="name">Max</span>
-      <button data-for="max" data-step="-0.5" aria-label="Lower maximum" disabled>&minus;</button>
-      <input id="max" type="text" inputmode="decimal" disabled>
-      <button data-for="max" data-step="0.5" aria-label="Raise maximum" disabled>+</button>
-      <span>&deg;C</span>
-    </div>
-  </div>
-
-  <div class="bar">
-    <span style="color: var(--muted)">Tap or click the image to place a spot.</span>
-    <button id="clear-spot" disabled>Clear spot</button>
-  </div>
-
   <div id="stats">not connected</div>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" aria-controls="tab-display">Display</button>
+    <button role="tab" aria-selected="false" aria-controls="tab-measurement">Measurement</button>
+    <button role="tab" aria-selected="false" aria-controls="tab-camera">Camera</button>
+  </div>
+
+  <section class="group" role="tabpanel" id="tab-display">
+    <div class="row">
+      <span class="label">Colours</span>
+      <div class="ctl"><select id="palette"></select></div>
+    </div>
+    <div class="row">
+      <span class="label">Range</span>
+      <div class="ctl">
+        <label><input type="radio" name="range" value="auto" checked> Auto</label>
+        <label><input type="radio" name="range" value="manual"> Manual</label>
+      </div>
+    </div>
+    <div class="row" id="manual-range" hidden>
+      <span class="label"></span>
+      <div class="ctl">
+        <div class="stepper">
+          <span class="name">Min</span>
+          <button data-for="min" data-step="-0.5" aria-label="Lower minimum" disabled>&minus;</button>
+          <input id="min" type="text" inputmode="decimal" disabled>
+          <button data-for="min" data-step="0.5" aria-label="Raise minimum" disabled>+</button>
+          <span>&deg;C</span>
+        </div>
+        <div class="stepper">
+          <span class="name">Max</span>
+          <button data-for="max" data-step="-0.5" aria-label="Lower maximum" disabled>&minus;</button>
+          <input id="max" type="text" inputmode="decimal" disabled>
+          <button data-for="max" data-step="0.5" aria-label="Raise maximum" disabled>+</button>
+          <span>&deg;C</span>
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <span class="label">Average</span>
+      <div class="ctl">
+        <select id="smoothing">
+          <option value="1">Off</option>
+          <option value="2">2 frames</option>
+          <option value="4">4 frames</option>
+          <option value="8">8 frames</option>
+        </select>
+        <span class="hint">less noise, more motion blur</span>
+      </div>
+    </div>
+    <div class="row">
+      <span class="label">Orientation</span>
+      <div class="ctl">
+        <button id="mirror" aria-pressed="false">Mirror</button>
+        <button id="flip" aria-pressed="false">Flip</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="group" role="tabpanel" id="tab-measurement" hidden>
+    <div class="row">
+      <span class="label">Spot</span>
+      <div class="ctl">
+        <button id="clear-spot" disabled>Clear</button>
+        <span class="hint">tap the image to place one</span>
+      </div>
+    </div>
+    <div class="row">
+      <span class="label">Emissivity</span>
+      <div class="ctl">
+        <div class="stepper">
+          <button data-for="emissivity" data-step="-0.01" aria-label="Lower emissivity" disabled>&minus;</button>
+          <input id="emissivity" type="text" inputmode="decimal" value="1.00" disabled>
+          <button data-for="emissivity" data-step="0.01" aria-label="Raise emissivity" disabled>+</button>
+        </div>
+        <select id="material" aria-label="Emissivity preset" disabled>
+          <option value="">Preset&hellip;</option>
+          <option value="1.00">Ideal black body (1.00)</option>
+          <option value="0.98">Skin, water (0.98)</option>
+          <option value="0.95">Matte paint, plastic, tape (0.95)</option>
+          <option value="0.93">Brick, concrete (0.93)</option>
+          <option value="0.90">Wood, paper (0.90)</option>
+          <option value="0.80">Oxidised steel (0.80)</option>
+          <option value="0.30">Dull aluminium (0.30)</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <section class="group" role="tabpanel" id="tab-camera" hidden>
+    <div class="row">
+      <span class="label">Gain</span>
+      <div class="ctl">
+        <select id="gain" disabled>
+          <option value="0">High (&minus;10 to 140 &deg;C)</option>
+          <option value="1">Low (up to about 380 &deg;C)</option>
+          <option value="2">Auto</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <span class="label">Calibration</span>
+      <div class="ctl">
+        <button id="calibrate" disabled>Calibrate now</button>
+        <span class="hint">also runs by itself every few minutes</span>
+      </div>
+    </div>
+  </section>
 </main>
 
 <script>
@@ -103,6 +191,10 @@ const MAX_TRANSFER = HEADER_LEN + WIDTH * HEIGHT * 2;
 const FORMAT_Y16 = 0;
 const FLAG_FFC = 1 << 0;
 const TICKS = 5;
+
+// Host commands: opcode, then a little-endian 16-bit argument.
+const CMD_SET_GAIN = 0x02, CMD_RUN_FFC = 0x03, CMD_SET_EMISSIVITY = 0x04;
+const EMISSIVITY_ONE = 8192;  // the camera's fixed-point 1.0
 
 // Each palette is a list of evenly spaced colour stops, expanded into a
 // 256-entry lookup table once.
@@ -119,7 +211,7 @@ const ctx = $('image').getContext('2d');
 const image = ctx.createImageData(WIDTH, HEIGHT);
 const legendCtx = $('legend').getContext('2d');
 
-let device, epIn;
+let device, epIn, epOut;
 let lut;                          // Uint8Array, 256 * 3
 let celsius = null;               // Float32Array of the latest frame, for spot lookups
 let spot = null;                  // { x, y } in sensor pixels
@@ -156,7 +248,8 @@ const isManual = () => document.querySelector('input[name=range]:checked').value
 for (const radio of document.querySelectorAll('input[name=range]')) {
   radio.onchange = () => {
     const manual = isManual();
-    for (const el of document.querySelectorAll('#min, #max, .stepper button')) el.disabled = !manual;
+    $('manual-range').hidden = !manual;
+    for (const el of document.querySelectorAll('#min, #max, [data-for=min], [data-for=max]')) el.disabled = !manual;
     if (manual && auto.lo !== null) {
       $('min').value = auto.lo.toFixed(1);
       $('max').value = auto.hi.toFixed(1);
@@ -171,13 +264,19 @@ $('min').oninput = $('max').oninput = () => celsius && render();
 const readValue = (id) => parseFloat($(id).value.replace(',', '.'));
 
 // Stepper buttons: one step per tap, repeating while held. Min is kept at
-// least one step below max so the range never inverts.
+// least one step below max so the range never inverts; emissivity stays
+// within what the camera accepts.
 const STEP_GAP = 0.5;
 function step(button) {
   const id = button.dataset.for, delta = parseFloat(button.dataset.step);
   let value = readValue(id);
-  if (!Number.isFinite(value)) value = 0;
+  if (!Number.isFinite(value)) value = id === 'emissivity' ? 1 : 0;
   value += delta;
+  if (id === 'emissivity') {
+    $(id).value = clampEmissivity(value).toFixed(2);
+    emissivityChanged();
+    return;
+  }
   if (id === 'min') value = Math.min(value, readValue('max') - STEP_GAP);
   else value = Math.max(value, readValue('min') + STEP_GAP);
   $(id).value = value.toFixed(1);
@@ -195,12 +294,127 @@ for (const button of document.querySelectorAll('.stepper button')) {
   for (const type of ['pointerup', 'pointerleave', 'pointercancel']) button.addEventListener(type, stop);
 }
 
+// Settings tabs: one group at a time, so the page fits a phone screen.
+const tabs = document.querySelectorAll('[role=tab]');
+function selectTab(panelId) {
+  for (const tab of tabs) {
+    const selected = tab.getAttribute('aria-controls') === panelId;
+    tab.setAttribute('aria-selected', selected);
+    $(tab.getAttribute('aria-controls')).hidden = !selected;
+  }
+  try { localStorage.setItem('tab', panelId); } catch {}
+}
+for (const tab of tabs) tab.onclick = () => selectTab(tab.getAttribute('aria-controls'));
+try {
+  const saved = localStorage.getItem('tab');
+  if (saved && $(saved)) selectTab(saved);
+} catch {}
+
+// Camera settings. The camera forgets them when it loses power, so they are
+// remembered here and sent again on every connect.
+const camera = { gain: 0, emissivity: 1 };
+try { Object.assign(camera, JSON.parse(localStorage.getItem('camera') || '{}')); } catch {}
+const saveCamera = () => { try { localStorage.setItem('camera', JSON.stringify(camera)); } catch {} };
+const clampEmissivity = (value) => Math.min(1, Math.max(0.01, Math.round(value * 100) / 100));
+$('gain').value = String(camera.gain);
+$('emissivity').value = camera.emissivity.toFixed(2);
+
+async function send(opcode, argument = 0) {
+  if (!device || epOut === undefined) return;
+  try {
+    await device.transferOut(epOut, new Uint8Array([opcode, argument & 0xff, argument >> 8]));
+  } catch (err) {
+    $('stats').textContent = `command failed: ${err.message}`;
+  }
+}
+const sendGain = () => send(CMD_SET_GAIN, camera.gain);
+const sendEmissivity = () => send(CMD_SET_EMISSIVITY, Math.round(camera.emissivity * EMISSIVITY_ONE));
+
+$('gain').onchange = () => {
+  camera.gain = Number($('gain').value);
+  saveCamera();
+  sendGain();
+  // A new gain changes every reading, so averaged history would blend two
+  // calibrations.
+  resetSmoothing();
+};
+$('calibrate').onclick = () => send(CMD_RUN_FFC);
+
+// Holding a stepper button repeats quickly; only the value it settles on needs
+// to reach the camera.
+let emissivityTimer;
+function emissivityChanged() {
+  const value = clampEmissivity(readValue('emissivity'));
+  if (!Number.isFinite(value)) return;
+  camera.emissivity = value;
+  $('material').value = '';
+  saveCamera();
+  clearTimeout(emissivityTimer);
+  emissivityTimer = setTimeout(sendEmissivity, 300);
+}
+$('emissivity').onchange = () => {
+  $('emissivity').value = clampEmissivity(readValue('emissivity') || 1).toFixed(2);
+  emissivityChanged();
+};
+$('material').onchange = () => {
+  const preset = $('material').value;
+  if (!preset) return;
+  $('emissivity').value = preset;
+  emissivityChanged();
+  $('material').value = preset;
+};
+
+// Temporal smoothing: the displayed frame is the average of the last N, which
+// cuts noise by about the square root of N at the cost of motion blur.
+let smoothing = 1, recent = [], recentSum = null;
+try { smoothing = Number(localStorage.getItem('smoothing')) || 1; } catch {}
+$('smoothing').value = String(smoothing);
+function resetSmoothing() { recent = []; recentSum = null; }
+$('smoothing').onchange = () => {
+  smoothing = Number($('smoothing').value);
+  try { localStorage.setItem('smoothing', String(smoothing)); } catch {}
+  resetSmoothing();
+};
+function smooth(frame) {
+  if (smoothing <= 1) return frame;
+  if (!recentSum) recentSum = new Float32Array(frame.length);
+  recent.push(frame);
+  for (let i = 0; i < frame.length; i++) recentSum[i] += frame[i];
+  while (recent.length > smoothing) {
+    const old = recent.shift();
+    for (let i = 0; i < old.length; i++) recentSum[i] -= old[i];
+  }
+  const out = new Float32Array(frame.length);
+  for (let i = 0; i < out.length; i++) out[i] = recentSum[i] / recent.length;
+  return out;
+}
+
 // Spot placement, in sensor pixels so it stays on the same point of the scene.
+// Mirror and flip are a CSS transform on the image canvas, done by the
+// browser's compositor, so they cost no per-pixel work here or on the camera.
+// The spot is stored in sensor pixels, so clicks and the marker are mapped
+// through the same transform; the marker's label stays readable.
+const orientation = { mirror: false, flip: false };
+try { Object.assign(orientation, JSON.parse(localStorage.getItem('orientation') || '{}')); } catch {}
+const toDisplayX = (x) => (orientation.mirror ? WIDTH - 1 - x : x);
+const toDisplayY = (y) => (orientation.flip ? HEIGHT - 1 - y : y);
+function applyOrientation() {
+  $('image').style.transform = `scale(${orientation.mirror ? -1 : 1}, ${orientation.flip ? -1 : 1})`;
+  $('mirror').setAttribute('aria-pressed', orientation.mirror);
+  $('flip').setAttribute('aria-pressed', orientation.flip);
+  try { localStorage.setItem('orientation', JSON.stringify(orientation)); } catch {}
+  if (celsius) render();
+}
+$('mirror').onclick = () => { orientation.mirror = !orientation.mirror; applyOrientation(); };
+$('flip').onclick = () => { orientation.flip = !orientation.flip; applyOrientation(); };
+applyOrientation();
+
 $('view').addEventListener('pointerdown', (e) => {
   const box = $('view').getBoundingClientRect();
+  // The same mapping undoes itself, so display to sensor uses it too.
   spot = {
-    x: Math.min(WIDTH - 1, Math.max(0, Math.floor(((e.clientX - box.left) / box.width) * WIDTH))),
-    y: Math.min(HEIGHT - 1, Math.max(0, Math.floor(((e.clientY - box.top) / box.height) * HEIGHT))),
+    x: toDisplayX(Math.min(WIDTH - 1, Math.max(0, Math.floor(((e.clientX - box.left) / box.width) * WIDTH)))),
+    y: toDisplayY(Math.min(HEIGHT - 1, Math.max(0, Math.floor(((e.clientY - box.top) / box.height) * HEIGHT)))),
   };
   $('clear-spot').disabled = false;
   if (celsius) render();
@@ -222,8 +436,12 @@ $('connect').onclick = async () => {
     // Endpoint numbers are assigned by the device, so read them off the
     // descriptor instead of assuming EP1.
     epIn = iface.alternate.endpoints.find((ep) => ep.direction === 'in').endpointNumber;
+    epOut = iface.alternate.endpoints.find((ep) => ep.direction === 'out').endpointNumber;
 
     $('connect').disabled = true;
+    for (const el of document.querySelectorAll('#gain, #calibrate, #emissivity, #material, [data-for=emissivity]')) el.disabled = false;
+    if (camera.gain !== 0) sendGain();
+    if (camera.emissivity !== 1) sendEmissivity();
     stream();
   } catch (err) {
     $('stats').textContent = `connect failed: ${err.message}`;
@@ -262,12 +480,17 @@ function receive(view) {
   // range don't jump to a flat grey field and back.
   const calibrating = (flags & FLAG_FFC) !== 0;
   $('calibrating').hidden = !calibrating;
-  if (!calibrating) {
+  if (calibrating) {
+    // A correction shifts every reading, so frames from before it must not be
+    // averaged with frames after.
+    resetSmoothing();
+  } else {
     // Centikelvin to Celsius.
-    celsius = new Float32Array(WIDTH * HEIGHT);
-    for (let i = 0; i < celsius.length; i++) {
-      celsius[i] = view.getUint16(HEADER_LEN + i * 2, true) / 100 - 273.15;
+    const frame = new Float32Array(WIDTH * HEIGHT);
+    for (let i = 0; i < frame.length; i++) {
+      frame[i] = view.getUint16(HEADER_LEN + i * 2, true) / 100 - 273.15;
     }
+    celsius = smooth(frame);
     render();
   }
 
@@ -323,13 +546,14 @@ function render() {
   if (spot) {
     const el = $('spot');
     el.hidden = false;
-    el.style.left = `${((spot.x + 0.5) / WIDTH) * 100}%`;
-    el.style.top = `${((spot.y + 0.5) / HEIGHT) * 100}%`;
+    const dx = toDisplayX(spot.x), dy = toDisplayY(spot.y);
+    el.style.left = `${((dx + 0.5) / WIDTH) * 100}%`;
+    el.style.top = `${((dy + 0.5) / HEIGHT) * 100}%`;
     const label = $('spot-label');
     label.textContent = `${celsius[spot.y * WIDTH + spot.x].toFixed(1)} °C`;
     // Keep the label on the image when the spot is near the right edge.
-    label.style.left = spot.x > WIDTH * 0.75 ? 'auto' : '12px';
-    label.style.right = spot.x > WIDTH * 0.75 ? '12px' : 'auto';
+    label.style.left = dx > WIDTH * 0.75 ? 'auto' : '12px';
+    label.style.right = dx > WIDTH * 0.75 ? '12px' : 'auto';
   }
 }
 </script>
