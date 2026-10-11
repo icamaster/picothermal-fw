@@ -1,6 +1,8 @@
-# picothermal
+# picothermal-fw
 
 ![desktop screenshot](docs/screenshot-desktop.png)
+
+Firmware for the [picothermal](https://github.com/icamaster/picothermal) camera. 
 
 Plug-and-play USB thermal camera: RP2040 + FLIR Lepton 3.5, embedded Rust firmware built on [embassy](https://embassy.dev). Streams raw radiometric video over WebUSB with no drivers to install (MS OS 2.0 descriptors bind WinUSB automatically on Windows).
 
