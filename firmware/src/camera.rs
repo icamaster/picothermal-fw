@@ -1,9 +1,14 @@
 //! Lepton bring-up and VoSPI capture.
 //!
 //! Owns the camera's power lines, its CCI bus and the VoSPI SPI port, and
-//! hands finished frames to the USB side through a zero-copy channel.
+//! hands finished frames to the USB side through a zero-copy channel. While
+//! capturing, the CCI bus is used only to watch for flat-field corrections, so
+//! frames showing the shutter can be flagged to the host.
+
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use defmt::{debug, info, warn};
+use embassy_futures::select::select;
 use embassy_rp::gpio::Output;
 use embassy_rp::i2c::{self, Async, I2c};
 use embassy_rp::peripherals::{I2C1, SPI0};
@@ -25,6 +30,15 @@ pub const SPI_HZ: u32 = 16_000_000;
 /// How long to wait before retrying a camera that failed to come up.
 const RETRY_MS: u64 = 1000;
 
+/// How often the FFC status is polled. A correction keeps the shutter closed
+/// for over a second, so this catches it within half a frame.
+const FFC_POLL_MS: u64 = 50;
+
+/// Whether the camera is in a flat-field correction. Written by the FFC
+/// watcher, read by capture as it finishes each frame. Only load and store are
+/// used, which thumbv6m supports without compare-and-swap.
+static FFC_ACTIVE: AtomicBool = AtomicBool::new(false);
+
 /// The camera's control lines and buses.
 pub struct Camera<'d> {
     /// RESET_L and PWR_DWN_L.
@@ -45,7 +59,16 @@ pub async fn run(mut camera: Camera<'_>, mut frames: Sender<'_, NoopRawMutex, Fr
     let scratch = SCRATCH.take();
     loop {
         match bring_up(&mut camera).await {
-            Ok(()) => capture(&mut camera, &mut frames, scratch).await,
+            // SPI and I2C are separate buses, so watching FFC runs alongside
+            // capture instead of pausing the packet reads, which would desync.
+            // The watcher never finishes; capture returning ends both.
+            Ok(()) => {
+                select(
+                    capture(&mut camera.spi, &mut camera.cs, &mut frames, scratch),
+                    watch_ffc(&mut camera.cci),
+                )
+                .await;
+            }
             Err(()) => Timer::after_millis(RETRY_MS).await,
         }
     }
@@ -54,6 +77,7 @@ pub async fn run(mut camera: Camera<'_>, mut frames: Sender<'_, NoopRawMutex, Fr
 /// Powers the camera, waits for it to boot and configures it for radiometry.
 async fn bring_up(camera: &mut Camera<'_>) -> Result<(), ()> {
     camera.cs.set_high();
+    FFC_ACTIVE.store(false, Ordering::Relaxed);
 
     if camera.power.up(&mut Delay).await.is_err() {
         warn!("camera: driving the power lines failed");
@@ -121,7 +145,8 @@ const STATS_INTERVAL: Duration = Duration::from_secs(5);
 /// Chip select stays low throughout: the camera keeps producing packets
 /// regardless, so pausing the reads is what causes a desync in the first place.
 async fn capture(
-    camera: &mut Camera<'_>,
+    spi: &mut Spi<'_, SPI0, spi::Async>,
+    cs: &mut Output<'_>,
     frames: &mut Sender<'_, NoopRawMutex, Frame>,
     scratch: &mut [u8; FRAME_LEN],
 ) {
@@ -131,21 +156,24 @@ async fn capture(
     let mut stats = Stats::default();
     let mut last_report = Instant::now();
 
-    camera.cs.set_low();
+    cs.set_low();
 
     loop {
         // Never wait for a buffer here: if USB still holds both, this frame is
         // assembled into scratch and thrown away.
         let mut slot = frames.try_send();
+        // A frame that overlaps a correction at either end shows the shutter
+        // for part of its height, so both ends count.
+        let ffc_at_start = FFC_ACTIVE.load(Ordering::Relaxed);
         let pixels: &mut [u8] = match &mut slot {
             Some(frame) => &mut frame.pixels,
             None => &mut scratch[..],
         };
 
         loop {
-            if camera.spi.read(&mut packet).await.is_err() {
+            if spi.read(&mut packet).await.is_err() {
                 warn!("camera: SPI read failed");
-                camera.cs.set_high();
+                cs.set_high();
                 return;
             }
 
@@ -154,10 +182,10 @@ async fn capture(
                 Progress::Desync => {
                     stats.desyncs += 1;
                     debug!("camera: VoSPI desync, resynchronising");
-                    camera.cs.set_high();
+                    cs.set_high();
                     Timer::after_millis(u64::from(RESYNC_DELAY_MS)).await;
                     assembler.resync();
-                    camera.cs.set_low();
+                    cs.set_low();
                 }
                 // The Lepton 3.5 emits segments faster than it exports unique
                 // frames and marks the surplus invalid, so this is routine.
@@ -168,6 +196,7 @@ async fn capture(
         match slot {
             Some(frame) => {
                 frame.seq = seq;
+                frame.ffc = ffc_at_start || FFC_ACTIVE.load(Ordering::Relaxed);
                 frames.send_done();
                 stats.sent += 1;
             }
@@ -183,6 +212,31 @@ async fn capture(
             stats = Stats::default();
             last_report = Instant::now();
         }
+    }
+}
+
+/// Polls the camera's FFC status forever, publishing it in [`FFC_ACTIVE`].
+async fn watch_ffc(cci: &mut Cci<I2c<'_, I2C1, Async>, Delay>) {
+    loop {
+        match cci.ffc_status().await {
+            Ok(status) => {
+                let active = status.in_progress();
+                if active != FFC_ACTIVE.load(Ordering::Relaxed) {
+                    info!(
+                        "camera: FFC {}",
+                        if active { "started" } else { "finished" }
+                    );
+                }
+                FFC_ACTIVE.store(active, Ordering::Relaxed);
+            }
+            // Keep the last known state: a missed poll should not flash the
+            // host's image back to a shutter frame or hide a real correction.
+            Err(error) => debug!(
+                "camera: FFC status read failed: {}",
+                defmt::Debug2Format(&error)
+            ),
+        }
+        Timer::after_millis(FFC_POLL_MS).await;
     }
 }
 

@@ -87,7 +87,7 @@ To tell transport from target-side problems: `RUST_LOG=probe_rs=debug probe-rs r
 
 ## Wire protocol (`thermal_core::protocol`)
 
-Little-endian. Video is a 16-byte `FrameHeader` (`"THRM"` magic, version, format, width, height, wrapping `seq`) followed by the payload on bulk IN. Hosts send fixed 2-byte `Command`s on bulk OUT.
+Little-endian. Video is a 16-byte `FrameHeader` (`"THRM"` magic, version, format, width, height, wrapping `seq`, `flags`) followed by the payload on bulk IN. Hosts send fixed 2-byte `Command`s on bulk OUT. `FrameHeader::FLAG_FFC` marks frames captured during a flat-field correction, which show the closed shutter: the firmware polls `Cci::ffc_status` every 50 ms alongside capture (separate bus, so the VoSPI reads never pause) and flags any frame that overlaps a correction at either end. The Lepton runs one roughly every 3 minutes; hosts should hold the last good frame rather than display these.
 
 ## Status and roadmap
 

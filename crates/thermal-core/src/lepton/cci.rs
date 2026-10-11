@@ -83,6 +83,9 @@ impl Command {
     pub const SYS_FLIR_SERIAL: Self = Self::at(Self::SYS, 0x0008);
     /// Focal plane array temperature in kelvin, hundredths. Get only, 1 word.
     pub const SYS_FPA_TEMPERATURE: Self = Self::at(Self::SYS, 0x0014);
+    /// State of the flat-field correction the camera runs on its own. Get
+    /// only, 2 words.
+    pub const SYS_FFC_STATUS: Self = Self::at(Self::SYS, 0x0044);
     /// Whether AGC is applied to the video output. 2 words.
     pub const AGC_ENABLE: Self = Self::at(Self::AGC, 0x0000);
     /// Which function the camera's GPIO3 pin serves; 5 selects VSYNC. 2 words.
@@ -103,6 +106,38 @@ impl Command {
 
 /// GPIO mode that makes the camera drive VSYNC.
 const GPIO_MODE_VSYNC: u32 = 5;
+
+/// Where the camera is in a flat-field correction.
+///
+/// The Lepton closes its shutter to recalibrate every few minutes, and after
+/// large temperature changes. While it does, its video shows the shutter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfcStatus {
+    /// No correction in progress.
+    Ready,
+    /// The shutter is closed and a correction is running.
+    Busy,
+    /// The camera is averaging frames to finish the correction.
+    Collecting,
+    /// The camera reported a failed correction.
+    Error,
+}
+
+impl FfcStatus {
+    /// Whether the video is showing the shutter rather than the scene.
+    pub fn in_progress(self) -> bool {
+        matches!(self, Self::Busy | Self::Collecting)
+    }
+
+    fn from_raw(raw: i32) -> Self {
+        match raw {
+            0 => Self::Ready,
+            1 => Self::Busy,
+            2 => Self::Collecting,
+            _ => Self::Error,
+        }
+    }
+}
 
 /// Errors from a CCI exchange.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +211,14 @@ impl<I2C: I2c, D: DelayNs> Cci<I2C, D> {
             .iter()
             .rev()
             .fold(0u64, |serial, &word| (serial << 16) | u64::from(word)))
+    }
+
+    /// Reads where the camera is in a flat-field correction.
+    pub async fn ffc_status(&mut self) -> Result<FfcStatus, Error<I2C::Error>> {
+        let mut words = [0u16; 2];
+        self.get(Command::SYS_FFC_STATUS, &mut words).await?;
+        let raw = u32::from(words[0]) | (u32::from(words[1]) << 16);
+        Ok(FfcStatus::from_raw(raw as i32))
     }
 
     /// Reads the focal plane array temperature, in hundredths of a kelvin.
@@ -338,7 +381,7 @@ impl<I2C: I2c, D: DelayNs> Cci<I2C, D> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cci, Command, Error, MAX_DATA_WORDS};
+    use super::{Cci, Command, Error, FfcStatus, MAX_DATA_WORDS};
     use crate::lepton::mock::{MockCamera, NoDelay};
     use crate::test_util::block_on;
 
@@ -424,6 +467,26 @@ mod tests {
             block_on(cci.get(Command::AGC_ENABLE, &mut out)),
             Err(Error::DataLength)
         );
+    }
+
+    #[test]
+    fn decodes_ffc_status() {
+        for (words, expected) in [
+            ([0x0000, 0x0000], FfcStatus::Ready),
+            ([0x0001, 0x0000], FfcStatus::Busy),
+            ([0x0002, 0x0000], FfcStatus::Collecting),
+            // -1, the camera's generic FFC error, as a 32-bit enum.
+            ([0xFFFF, 0xFFFF], FfcStatus::Error),
+        ] {
+            let mut camera = MockCamera::new();
+            camera.stage_data(&words);
+            let mut cci = Cci::new(camera, NoDelay);
+            assert_eq!(block_on(cci.ffc_status()), Ok(expected));
+            assert_eq!(cci.i2c.last_command, 0x0244);
+        }
+        assert!(FfcStatus::Busy.in_progress());
+        assert!(FfcStatus::Collecting.in_progress());
+        assert!(!FfcStatus::Ready.in_progress());
     }
 
     #[test]

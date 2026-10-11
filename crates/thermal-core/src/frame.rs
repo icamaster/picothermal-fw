@@ -96,6 +96,7 @@ mod tests {
                 width: WIDTH as u16,
                 height: HEIGHT as u16,
                 format,
+                flags: 0,
             };
             assert_eq!(header.payload_len(), payload_len(format));
         }

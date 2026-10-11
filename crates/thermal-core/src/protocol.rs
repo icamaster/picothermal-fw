@@ -70,9 +70,15 @@ pub struct FrameHeader {
     pub height: u16,
     /// Pixel format of the payload.
     pub format: PixelFormat,
+    /// Bit flags describing the frame, see [`FrameHeader::FLAG_FFC`].
+    pub flags: u8,
 }
 
 impl FrameHeader {
+    /// The camera was running a flat-field correction when this frame was
+    /// captured, so its pixels show the shutter rather than the scene.
+    pub const FLAG_FFC: u8 = 1 << 0;
+
     /// Encoded size of a frame header in bytes.
     pub const LEN: usize = 16;
 
@@ -90,6 +96,9 @@ impl FrameHeader {
         bytes[6..8].copy_from_slice(&self.width.to_le_bytes());
         bytes[8..10].copy_from_slice(&self.height.to_le_bytes());
         bytes[10..14].copy_from_slice(&self.seq.to_le_bytes());
+        // Byte 14 was reserved and always zero before flags existed, so hosts
+        // that predate them read every frame as unflagged.
+        bytes[14] = self.flags;
         bytes
     }
 
@@ -109,6 +118,7 @@ impl FrameHeader {
             width: u16::from_le_bytes([bytes[6], bytes[7]]),
             height: u16::from_le_bytes([bytes[8], bytes[9]]),
             seq: u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]),
+            flags: bytes[14],
         })
     }
 }
@@ -222,6 +232,7 @@ mod tests {
             width: 160,
             height: 120,
             format: PixelFormat::Y16,
+            flags: FrameHeader::FLAG_FFC,
         }
     }
 
@@ -339,6 +350,7 @@ mod tests {
                 width: frame::WIDTH as u16,
                 height: frame::HEIGHT as u16,
                 format,
+                flags: 0,
             };
             let mut packetizer = Packetizer::new(header, PACKET);
             let host = MockHost::drain(&mut packetizer, PACKET, &pattern, format);
@@ -376,6 +388,7 @@ mod tests {
             width: 24,
             height: 2,
             format: PixelFormat::Agc8,
+            flags: 0,
         };
         assert_eq!(FrameHeader::LEN + header.payload_len(), PACKET);
 

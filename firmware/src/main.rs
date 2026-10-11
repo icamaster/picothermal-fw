@@ -36,6 +36,8 @@ bind_interrupts!(struct Irqs {
 pub struct Frame {
     /// Sequence number, wrapping, so the host can spot dropped frames.
     pub seq: u32,
+    /// Captured during a flat-field correction, so it shows the shutter.
+    pub ffc: bool,
     /// Pixel data, already in the byte order the wire protocol uses.
     pub pixels: [u8; FRAME_LEN],
 }
@@ -45,6 +47,7 @@ impl Frame {
     /// than building 75 KB of them on the stack.
     const ZERO: Self = Self {
         seq: 0,
+        ffc: false,
         pixels: [0; FRAME_LEN],
     };
 }

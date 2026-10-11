@@ -155,7 +155,8 @@ pub async fn stream(
                 Either::First(frame) => {
                     // Camera frames are always radiometric; the pixel format
                     // command only reaches the test pattern for now.
-                    let header = header(frame.seq, PixelFormat::Y16);
+                    let flags = if frame.ffc { FrameHeader::FLAG_FFC } else { 0 };
+                    let header = header(frame.seq, PixelFormat::Y16, flags);
                     let result = send_frame(ep, header, |offset, dst| {
                         dst.copy_from_slice(&frame.pixels[offset..offset + dst.len()])
                     })
@@ -165,7 +166,7 @@ pub async fn stream(
                 }
                 Either::Second(()) => {
                     let format = current_format();
-                    let header = header(fallback_seq, format);
+                    let header = header(fallback_seq, format, 0);
                     fallback_seq = fallback_seq.wrapping_add(1);
                     let result =
                         send_frame(ep, header, |offset, dst| pattern.fill(format, offset, dst))
@@ -184,12 +185,13 @@ pub async fn stream(
 }
 
 /// Header for a frame of the camera's geometry.
-fn header(seq: u32, format: PixelFormat) -> FrameHeader {
+fn header(seq: u32, format: PixelFormat, flags: u8) -> FrameHeader {
     FrameHeader {
         seq,
         width: frame::WIDTH as u16,
         height: frame::HEIGHT as u16,
         format,
+        flags,
     }
 }
 
