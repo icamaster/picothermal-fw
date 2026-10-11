@@ -20,6 +20,7 @@
   main { max-width: 640px; margin: 0 auto; }
   header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .5rem; }
   h1 { font-size: 1.2rem; margin: 0; }
+  .version { font-size: .8rem; font-weight: normal; color: var(--muted); margin-left: .4rem; font-variant-numeric: tabular-nums; }
   button, select, input { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: .35rem .6rem; }
   button:disabled, input:disabled { opacity: .45; }
   button[aria-pressed=true] { background: #3a3a3a; border-color: #888; }
@@ -58,7 +59,7 @@
 <body>
 <main>
   <header>
-    <h1>picothermal</h1>
+    <h1>picothermal<span class="version" id="version"></span></h1>
     <button id="connect">Connect</button>
   </header>
 
@@ -437,6 +438,10 @@ $('connect').onclick = async () => {
     // descriptor instead of assuming EP1.
     epIn = iface.alternate.endpoints.find((ep) => ep.direction === 'in').endpointNumber;
     epOut = iface.alternate.endpoints.find((ep) => ep.direction === 'out').endpointNumber;
+
+    // The firmware reports its own version as the USB device release, so this
+    // is always the version actually running on the camera.
+    $('version').textContent = `v${device.deviceVersionMajor}.${device.deviceVersionMinor}.${device.deviceVersionSubminor}`;
 
     $('connect').disabled = true;
     for (const el of document.querySelectorAll('#gain, #calibrate, #emissivity, #material, [data-for=emissivity]')) el.disabled = false;

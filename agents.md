@@ -89,6 +89,10 @@ To tell transport from target-side problems: `RUST_LOG=probe_rs=debug probe-rs r
 
 Little-endian. Video is a 16-byte `FrameHeader` (`"THRM"` magic, version, format, width, height, wrapping `seq`, `flags`) followed by the payload on bulk IN. Hosts send fixed 3-byte `Command`s on bulk OUT (opcode, then a little-endian 16-bit argument): `SetPixelFormat`, `SetGainMode`, `RunFfc` and `SetEmissivity` (scaled so 8192 is 1.0, the camera's own encoding). Camera commands are handed from the USB side to the camera task through `camera::CONTROL`, because the CCI bus belongs to that task; it applies them between FFC polls and re-applies gain and emissivity if the camera has to be powered up again. All of them are verified on hardware. `FrameHeader::FLAG_FFC` marks frames captured during a flat-field correction, which show the closed shutter: the firmware polls `Cci::ffc_status` every 50 ms alongside capture (separate bus, so the VoSPI reads never pause) and flags any frame that overlaps a correction at either end. The Lepton runs one roughly every 3 minutes; hosts should hold the last good frame rather than display these.
 
+## Versioning
+
+Semantic versioning, with the version in `firmware/Cargo.toml` as the single source of truth. The firmware encodes it at compile time into the USB device release number (`protocol::usb_device_release`), and the page reads it back from the device, so the version shown is always the one actually running. That field is BCD: major up to 99, minor and patch up to 9 each, and anything else fails the build. Every version bump gets a matching entry in `CHANGELOG.md` (Keep a Changelog format). `thermal-core` keeps its own crate version in the root workspace.
+
 ## Status and roadmap
 
 - [x] M1 - Workspace, `just` tooling, protocol module with host tests.

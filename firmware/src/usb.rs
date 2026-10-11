@@ -15,7 +15,7 @@ use embassy_usb::driver::{EndpointIn, EndpointOut};
 use embassy_usb::msos::{self, windows_version};
 use embassy_usb::{Builder, Config};
 use thermal_core::frame::{self, TestPattern};
-use thermal_core::protocol::{Command, FrameHeader, Packetizer, PixelFormat};
+use thermal_core::protocol::{Command, FrameHeader, Packetizer, PixelFormat, usb_device_release};
 
 use crate::Frame;
 
@@ -26,6 +26,11 @@ pub const MAX_PACKET_SIZE: u16 = 64;
 /// ships, because Windows caches MS OS 2.0 descriptors per VID/PID.
 const VID: u16 = 0x1209;
 const PID: u16 = 0x0001;
+
+/// The firmware's version, as the device release number hosts read from the
+/// device descriptor. Windows keys its cached driver choice on it too, so a new
+/// version is re-examined rather than trusted from an older one.
+const DEVICE_RELEASE: u16 = usb_device_release(env!("CARGO_PKG_VERSION"));
 
 /// bRequest the host uses for MS OS 2.0 and WebUSB vendor control transfers.
 const VENDOR_CODE: u8 = 0x01;
@@ -79,6 +84,7 @@ pub fn build<'d>(
     buffers: &'d mut Buffers,
 ) -> (embassy_usb::UsbDevice<'d, Driver<'d, USB>>, Endpoints<'d>) {
     let mut config = Config::new(VID, PID);
+    config.device_release = DEVICE_RELEASE;
     config.manufacturer = Some("rust-thermal");
     config.product = Some("Lepton 3.5 thermal camera");
     config.serial_number = Some("0001");

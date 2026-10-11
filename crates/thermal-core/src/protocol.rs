@@ -207,6 +207,50 @@ impl GainMode {
     }
 }
 
+/// Encodes a `major.minor.patch` version as the USB device release number.
+///
+/// The descriptor field is binary-coded decimal, `0xJJMN`, which browsers
+/// expose to WebUSB pages as `deviceVersionMajor/Minor/Subminor`, so the
+/// firmware's own version is what the host sees. Meant for
+/// `env!("CARGO_PKG_VERSION")` in a constant: anything BCD cannot hold
+/// (major above 99, minor or patch above 9) or that is not three numbers then
+/// fails the build instead of shipping a wrong version.
+pub const fn usb_device_release(version: &str) -> u16 {
+    let bytes = version.as_bytes();
+    let mut parts = [0u16; 3];
+    let mut part = 0;
+    let mut digits = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if byte == b'.' {
+            assert!(digits > 0 && part < 2, "version must be major.minor.patch");
+            part += 1;
+            digits = 0;
+        } else if byte.is_ascii_digit() {
+            parts[part] = parts[part] * 10 + (byte - b'0') as u16;
+            digits += 1;
+        } else {
+            // Pre-release or build suffixes, such as "-rc.1", have no place in
+            // the USB field.
+            panic!("version must be plain major.minor.patch");
+        }
+        i += 1;
+    }
+    assert!(digits > 0 && part == 2, "version must be major.minor.patch");
+
+    let [major, minor, patch] = parts;
+    assert!(
+        major <= 99,
+        "USB device release holds a major version up to 99"
+    );
+    assert!(
+        minor <= 9 && patch <= 9,
+        "USB device release holds minor and patch up to 9"
+    );
+    ((major / 10) << 12) | ((major % 10) << 8) | (minor << 4) | patch
+}
+
 /// Splits one frame into bulk endpoint packets.
 ///
 /// The device writes each packet as it is produced, so a frame never has to
@@ -279,7 +323,9 @@ impl Packetizer {
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, Error, FrameHeader, GainMode, Packetizer, PixelFormat, VERSION};
+    use super::{
+        Command, Error, FrameHeader, GainMode, Packetizer, PixelFormat, VERSION, usb_device_release,
+    };
     use crate::frame::{self, TestPattern};
 
     fn lepton_header() -> FrameHeader {
@@ -333,6 +379,32 @@ mod tests {
             FrameHeader::from_bytes(&good[..FrameHeader::LEN - 1]),
             Err(Error::TooShort)
         );
+    }
+
+    #[test]
+    fn usb_device_release_is_bcd() {
+        assert_eq!(usb_device_release("0.1.0"), 0x0010);
+        assert_eq!(usb_device_release("1.2.3"), 0x0123);
+        assert_eq!(usb_device_release("12.0.9"), 0x1209);
+        assert_eq!(usb_device_release("99.9.9"), 0x9999);
+    }
+
+    #[test]
+    #[should_panic(expected = "minor and patch up to 9")]
+    fn usb_device_release_rejects_two_digit_minor() {
+        usb_device_release("0.10.0");
+    }
+
+    #[test]
+    #[should_panic(expected = "plain major.minor.patch")]
+    fn usb_device_release_rejects_pre_releases() {
+        usb_device_release("1.0.0-rc.1");
+    }
+
+    #[test]
+    #[should_panic(expected = "major.minor.patch")]
+    fn usb_device_release_rejects_missing_parts() {
+        usb_device_release("1.0");
     }
 
     #[test]
