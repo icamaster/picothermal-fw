@@ -3,17 +3,18 @@
 //! Owns the camera's power lines, its CCI bus and the VoSPI SPI port, and
 //! hands finished frames to the USB side through a zero-copy channel.
 
-use defmt::{info, warn};
+use defmt::{debug, info, warn};
 use embassy_rp::gpio::Output;
 use embassy_rp::i2c::{self, Async, I2c};
 use embassy_rp::peripherals::{I2C1, SPI0};
 use embassy_rp::spi::{self, Spi};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::zerocopy_channel::Sender;
-use embassy_time::{Delay, Timer};
+use embassy_time::{Delay, Duration, Instant, Timer};
+use static_cell::ConstStaticCell;
 use thermal_core::lepton::cci::Cci;
 use thermal_core::lepton::power::Power;
-use thermal_core::lepton::vospi::{Assembler, PACKET_LEN, Progress, RESYNC_DELAY_MS};
+use thermal_core::lepton::vospi::{Assembler, FRAME_LEN, PACKET_LEN, Progress, RESYNC_DELAY_MS};
 
 use crate::Frame;
 
@@ -41,9 +42,10 @@ pub struct Camera<'d> {
 /// Bring-up failures are logged and retried rather than fatal: a board with no
 /// camera attached should still enumerate and stream.
 pub async fn run(mut camera: Camera<'_>, mut frames: Sender<'_, NoopRawMutex, Frame>) -> ! {
+    let scratch = SCRATCH.take();
     loop {
         match bring_up(&mut camera).await {
-            Ok(()) => capture(&mut camera, &mut frames).await,
+            Ok(()) => capture(&mut camera, &mut frames, scratch).await,
             Err(()) => Timer::after_millis(RETRY_MS).await,
         }
     }
@@ -103,51 +105,93 @@ async fn bring_up(camera: &mut Camera<'_>) -> Result<(), ()> {
     Ok(())
 }
 
+/// Where frames are assembled when both channel buffers are taken.
+///
+/// The camera has to be read continuously or it desyncs, so a host that is slow
+/// or not reading at all must cost dropped frames rather than a stalled
+/// capture loop. This buffer absorbs those frames.
+static SCRATCH: ConstStaticCell<[u8; FRAME_LEN]> = ConstStaticCell::new([0; FRAME_LEN]);
+
+/// How often capture statistics are logged.
+const STATS_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Reads packets until the stream cannot be recovered, filling frames as it
 /// goes. Returns so the caller can bring the camera up again.
 ///
 /// Chip select stays low throughout: the camera keeps producing packets
 /// regardless, so pausing the reads is what causes a desync in the first place.
-async fn capture(camera: &mut Camera<'_>, frames: &mut Sender<'_, NoopRawMutex, Frame>) {
+async fn capture(
+    camera: &mut Camera<'_>,
+    frames: &mut Sender<'_, NoopRawMutex, Frame>,
+    scratch: &mut [u8; FRAME_LEN],
+) {
     let mut assembler = Assembler::new();
     let mut packet = [0u8; PACKET_LEN];
     let mut seq: u32 = 0;
+    let mut stats = Stats::default();
+    let mut last_report = Instant::now();
 
     camera.cs.set_low();
 
     loop {
-        // The assembler writes straight into the channel's buffer, so
-        // publishing a frame costs no copy.
-        let frame = frames.send().await;
-        let mut complete = false;
+        // Never wait for a buffer here: if USB still holds both, this frame is
+        // assembled into scratch and thrown away.
+        let mut slot = frames.try_send();
+        let pixels: &mut [u8] = match &mut slot {
+            Some(frame) => &mut frame.pixels,
+            None => &mut scratch[..],
+        };
 
-        while !complete {
+        loop {
             if camera.spi.read(&mut packet).await.is_err() {
                 warn!("camera: SPI read failed");
                 camera.cs.set_high();
                 return;
             }
 
-            match assembler.push(&packet, &mut frame.pixels) {
-                Progress::Frame => {
-                    frame.seq = seq;
-                    complete = true;
-                }
+            match assembler.push(&packet, pixels) {
+                Progress::Frame => break,
                 Progress::Desync => {
-                    warn!("camera: VoSPI desync, resynchronising");
+                    stats.desyncs += 1;
+                    debug!("camera: VoSPI desync, resynchronising");
                     camera.cs.set_high();
                     Timer::after_millis(u64::from(RESYNC_DELAY_MS)).await;
                     assembler.resync();
                     camera.cs.set_low();
                 }
-                Progress::SegmentDropped => info!("camera: segment dropped"),
-                Progress::Discarded | Progress::InProgress => {}
+                // The Lepton 3.5 emits segments faster than it exports unique
+                // frames and marks the surplus invalid, so this is routine.
+                Progress::SegmentDropped | Progress::Discarded | Progress::InProgress => {}
             }
         }
 
+        match slot {
+            Some(frame) => {
+                frame.seq = seq;
+                frames.send_done();
+                stats.sent += 1;
+            }
+            None => stats.dropped += 1,
+        }
         seq = seq.wrapping_add(1);
-        frames.send_done();
+
+        if last_report.elapsed() >= STATS_INTERVAL {
+            info!(
+                "camera: {=u32} frames sent, {=u32} dropped for lack of a buffer, {=u32} desyncs",
+                stats.sent, stats.dropped, stats.desyncs
+            );
+            stats = Stats::default();
+            last_report = Instant::now();
+        }
     }
+}
+
+/// Counters for one statistics interval.
+#[derive(Default)]
+struct Stats {
+    sent: u32,
+    dropped: u32,
+    desyncs: u32,
 }
 
 /// Default configuration for the VoSPI port.

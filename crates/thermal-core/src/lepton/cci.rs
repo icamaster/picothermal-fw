@@ -5,7 +5,10 @@
 //! for BUSY to clear again and reads the result. [`Cci`] wraps that handshake
 //! and exposes the commands the firmware needs.
 //!
-//! Register contents are big-endian on the wire, unlike the frame protocol.
+//! Each 16-bit register is big-endian on the wire, but values wider than one
+//! register are split least significant word first, so a 32-bit enum occupies
+//! DATA_0 (low half) then DATA_1 (high half). Confirmed on hardware: the other
+//! order made the camera reject VSYNC mode 5 with a range error.
 
 use embedded_hal_async::delay::DelayNs;
 use embedded_hal_async::i2c::I2c;
@@ -52,9 +55,9 @@ enum CommandType {
     Run = 2,
 }
 
-// TODO(cci): the command IDs below come from the FLIR Lepton Software IDD and
-// have not been confirmed against hardware. Check each one on first bring-up;
-// a wrong ID shows up as Error::Camera rather than as a bus failure.
+// Command IDs come from the FLIR Lepton Software IDD. All but
+// SYS_FPA_TEMPERATURE have been exercised on hardware; a wrong ID shows up as
+// Error::Camera rather than as a bus failure.
 
 /// A CCI command, identified by its module base and offset.
 ///
@@ -171,6 +174,7 @@ impl<I2C: I2c, D: DelayNs> Cci<I2C, D> {
         self.get(Command::SYS_FLIR_SERIAL, &mut words).await?;
         Ok(words
             .iter()
+            .rev()
             .fold(0u64, |serial, &word| (serial << 16) | u64::from(word)))
     }
 
@@ -269,9 +273,9 @@ impl<I2C: I2c, D: DelayNs> Cci<I2C, D> {
         self.finish().await
     }
 
-    /// Sets a command whose payload is a single 32-bit enum, high word first.
+    /// Sets a command whose payload is a single 32-bit enum.
     async fn set_enum(&mut self, command: Command, value: u32) -> Result<(), Error<I2C::Error>> {
-        self.set(command, &[(value >> 16) as u16, value as u16])
+        self.set(command, &[value as u16, (value >> 16) as u16])
             .await
     }
 
@@ -369,9 +373,9 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_serial_number_big_endian() {
+    fn reads_the_serial_number_low_word_first() {
         let mut camera = MockCamera::new();
-        camera.stage_data(&[0x0011, 0x2233, 0x4455, 0x6677]);
+        camera.stage_data(&[0x6677, 0x4455, 0x2233, 0x0011]);
         let mut cci = Cci::new(camera, NoDelay);
 
         assert_eq!(
@@ -383,12 +387,12 @@ mod tests {
     }
 
     #[test]
-    fn enum_setters_send_a_32_bit_value_high_word_first() {
+    fn enum_setters_send_a_32_bit_value_low_word_first() {
         let mut cci = Cci::new(MockCamera::new(), NoDelay);
         block_on(cci.enable_vsync()).unwrap();
 
         let (camera, _) = cci.release();
-        assert_eq!(camera.written_data(), &[0x0000, 0x0005]);
+        assert_eq!(camera.written_data(), &[0x0005, 0x0000]);
         // OEM module with the protection bit, GPIO mode select, set.
         assert_eq!(camera.last_command, 0x4855);
     }
@@ -399,7 +403,7 @@ mod tests {
 
         block_on(cci.set_agc(true)).unwrap();
         assert_eq!(cci.i2c.last_command, 0x0101);
-        assert_eq!(cci.i2c.written_data(), &[0x0000, 0x0001]);
+        assert_eq!(cci.i2c.written_data(), &[0x0001, 0x0000]);
 
         block_on(cci.set_tlinear(false)).unwrap();
         assert_eq!(cci.i2c.last_command, 0x4EC1);

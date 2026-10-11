@@ -70,21 +70,38 @@ impl PacketHeader {
     }
 }
 
-/// CRC-16/CCITT over `bytes`, the XMODEM variant: polynomial 0x1021, initial
-/// value zero, no reflection and no final xor.
-fn crc16_over(bytes: impl Iterator<Item = u8>) -> u16 {
-    let mut crc: u16 = 0;
-    for byte in bytes {
-        crc ^= u16::from(byte) << 8;
-        for _ in 0..8 {
+/// Lookup table for [`crc16`], one entry per byte value.
+///
+/// The CRC runs on every packet in the capture loop, and on a Cortex-M0+ the
+/// bit-at-a-time form costs about as long as the SPI transfer of the packet
+/// itself. Reading slower than the camera produces corrupts the stream, so the
+/// 512 bytes of flash are worth it.
+static CRC_TABLE: [u16; 256] = {
+    let mut table = [0u16; 256];
+    let mut byte = 0;
+    while byte < 256 {
+        let mut crc = (byte as u16) << 8;
+        let mut bit = 0;
+        while bit < 8 {
             crc = if crc & 0x8000 != 0 {
                 (crc << 1) ^ 0x1021
             } else {
                 crc << 1
             };
+            bit += 1;
         }
+        table[byte] = crc;
+        byte += 1;
     }
-    crc
+    table
+};
+
+/// CRC-16/CCITT over `bytes`, the XMODEM variant: polynomial 0x1021, initial
+/// value zero, no reflection and no final xor.
+fn crc16_over(bytes: impl Iterator<Item = u8>) -> u16 {
+    bytes.fold(0, |crc, byte| {
+        (crc << 8) ^ CRC_TABLE[usize::from((crc >> 8) as u8 ^ byte)]
+    })
 }
 
 /// CRC-16/CCITT over a slice.
@@ -98,11 +115,13 @@ pub fn crc16(data: &[u8]) -> u16 {
 /// field before computing it, so those bytes are substituted on the way through
 /// rather than by copying the packet.
 pub fn packet_crc(packet: &[u8]) -> u16 {
-    crc16_over(packet.iter().enumerate().map(|(index, &byte)| match index {
+    let (head, payload) = packet.split_at(4.min(packet.len()));
+    let head = head.iter().enumerate().map(|(index, &byte)| match index {
         0 => byte & 0x0F,
         2 | 3 => 0,
         _ => byte,
-    }))
+    });
+    crc16_over(head.chain(payload.iter().copied()))
 }
 
 /// What a packet did to the stream.
@@ -336,6 +355,30 @@ mod tests {
     fn synchronise(assembler: &mut Assembler, frame: &mut [u8]) {
         let end_of_frame = packet(SEGMENTS_PER_FRAME as u8, 20, 0);
         assert_eq!(assembler.push(&end_of_frame, frame), Progress::Discarded);
+    }
+
+    #[test]
+    fn table_crc_matches_the_bitwise_definition() {
+        fn bitwise(data: &[u8]) -> u16 {
+            let mut crc: u16 = 0;
+            for &byte in data {
+                crc ^= u16::from(byte) << 8;
+                for _ in 0..8 {
+                    crc = if crc & 0x8000 != 0 {
+                        (crc << 1) ^ 0x1021
+                    } else {
+                        crc << 1
+                    };
+                }
+            }
+            crc
+        }
+
+        let packet = packet(2, 33, 91);
+        assert_eq!(crc16(&packet), bitwise(&packet));
+        for byte in 0..=255u8 {
+            assert_eq!(crc16(&[byte, !byte]), bitwise(&[byte, !byte]));
+        }
     }
 
     #[test]

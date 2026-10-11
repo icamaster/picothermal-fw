@@ -94,18 +94,19 @@ pub fn build<'d>(
         &mut buffers.control_buf,
     );
 
-    // Must precede the function so its descriptors land inside the set.
+    // Without these two, Windows leaves the device unbound and the browser
+    // cannot open it: WINUSB selects the driver, and the GUID is what WinUSB
+    // registers the device interface under. They must be device-level: with a
+    // single interface Windows treats the device as non-composite and ignores
+    // function subsets, which left it with no driver (code 28) on hardware.
     builder.msos_descriptor(windows_version::WIN8_1, VENDOR_CODE);
-
-    let mut function = builder.function(0xFF, 0x00, 0x00);
-    // Without these two, Windows leaves the interface unbound and the browser
-    // cannot open the device: WINUSB selects the driver, and the GUID is what
-    // WinUSB registers the device interface under.
-    function.msos_feature(msos::CompatibleIdFeatureDescriptor::new("WINUSB", ""));
-    function.msos_feature(msos::RegistryPropertyFeatureDescriptor::new(
+    builder.msos_feature(msos::CompatibleIdFeatureDescriptor::new("WINUSB", ""));
+    builder.msos_feature(msos::RegistryPropertyFeatureDescriptor::new(
         "DeviceInterfaceGUIDs",
         msos::PropertyData::RegMultiSz(&[DEVICE_INTERFACE_GUID]),
     ));
+
+    let mut function = builder.function(0xFF, 0x00, 0x00);
 
     let mut interface = function.interface();
     let mut alt = interface.alt_setting(0xFF, 0x00, 0x00, None);
