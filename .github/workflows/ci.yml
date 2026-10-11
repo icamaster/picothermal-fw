@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: just check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # With no arguments, rustup installs the toolchain rust-toolchain.toml
+      # pins, including its components and the thumbv6m target.
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+
+      # The firmware is its own workspace with its own target directory, so
+      # both need caching.
+      - name: Cache cargo builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            firmware
+
+      - name: Format, lint, test and build
+        run: just check

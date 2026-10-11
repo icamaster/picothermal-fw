@@ -91,7 +91,7 @@ Little-endian. Video is a 16-byte `FrameHeader` (`"THRM"` magic, version, format
 
 ## Versioning
 
-Semantic versioning, with the version in `firmware/Cargo.toml` as the single source of truth. The firmware encodes it at compile time into the USB device release number (`protocol::usb_device_release`), and the page reads it back from the device, so the version shown is always the one actually running. That field is BCD: major up to 99, minor and patch up to 9 each, and anything else fails the build. Every version bump gets a matching entry in `CHANGELOG.md` (Keep a Changelog format). `thermal-core` keeps its own crate version in the root workspace.
+Semantic versioning, with the version in `firmware/Cargo.toml` as the single source of truth. The firmware encodes it at compile time into the USB device release number (`protocol::usb_device_release`), and the page reads it back from the device, so the version shown is always the one actually running. That field is BCD: major up to 99, minor and patch up to 9 each, and anything else fails the build. Every version bump gets a matching entry in `CHANGELOG.md` (Keep a Changelog format). Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, which refuses a tag that disagrees with `firmware/Cargo.toml` and uses the changelog section as the release text; `.github/workflows/ci.yml` runs `just check` on pushes to `main` and on pull requests. `thermal-core` keeps its own crate version in the root workspace.
 
 ## Status and roadmap
 

@@ -1,0 +1,77 @@
+name: Release
+
+# Pushing a tag like v0.1.0 builds the firmware and publishes it as a GitHub
+# release, with the matching CHANGELOG.md section as the release text.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The firmware reports its version to hosts from firmware/Cargo.toml, so
+      # a tag that disagrees would publish a binary claiming another version.
+      - name: Check the tag matches the firmware version
+        run: |
+          version="$(grep -m1 '^version' firmware/Cargo.toml | cut -d'"' -f2)"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match firmware/Cargo.toml version $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+
+      # elf2uf2-rs links against libudev for its optional flashing support.
+      - name: Install elf2uf2-rs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev
+          cargo install elf2uf2-rs --locked
+
+      - name: Cache cargo builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: firmware
+
+      - name: Build the release firmware
+        run: just build-release
+
+      - name: Package
+        run: |
+          mkdir dist
+          elf=firmware/target/thumbv6m-none-eabi/release/firmware
+          cp "$elf" "dist/picothermal-fw-$VERSION.elf"
+          elf2uf2-rs "$elf" "dist/picothermal-fw-$VERSION.uf2"
+          cp docs/test-page.html dist/test-page.html
+
+      # The release text is this version's section of CHANGELOG.md: everything
+      # from its heading up to the next version's heading.
+      - name: Extract release notes
+        run: |
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $VERSION"
+            exit 1
+          fi
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: picothermal-fw ${{ env.VERSION }}
+          body_path: release-notes.md
+          files: dist/*
