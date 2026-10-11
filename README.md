@@ -4,6 +4,11 @@
 
 Plug-and-play USB thermal camera: RP2040 + FLIR Lepton 3.5, embedded Rust firmware built on [embassy](https://embassy.dev). Streams raw radiometric video over WebUSB with no drivers to install (MS OS 2.0 descriptors bind WinUSB automatically on Windows).
 
+# Usage 
+
+1. Flash the latest uf2/elf release on a [picothermal](https://github.com/icamaster/picothermal) camera.
+2. Open the [WebUSB app](www.cezarchirila.com/webusb/picothermal.html) or self-host/open the "test-page" HTML locally (also found on the latest release).  
+
 ## Layout
 
 | Path | What it is |
