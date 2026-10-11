@@ -11,6 +11,10 @@ Plug-and-play USB thermal camera: RP2040 + FLIR Lepton 3.5, embedded Rust firmwa
 1. Flash the latest uf2/elf release on a [picothermal](https://github.com/icamaster/picothermal) camera.
 2. Open the [WebUSB app](www.cezarchirila.com/webusb/picothermal.html) or self-host/open the "test-page" HTML locally (also found on the latest release).  
 
+# AI Usage
+
+Disclaimer: Everything below this line and the majority of this repository has been written by agents.
+
 ## Layout
 
 | Path | What it is |
