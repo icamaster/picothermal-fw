@@ -13,4 +13,4 @@ Initial release.
 - Two-core runtime: capture runs alone on core 1 with DMA reads, USB and camera control on core 0, so streaming never disturbs capture. A watchdog power-cycles the camera if frames stop.
 - Camera control from the host: gain mode (high, low, auto), on-demand flat-field correction, and scene emissivity, re-applied automatically if the camera restarts.
 - Frames captured during a flat-field correction are flagged, so hosts can hold the last good image instead of showing the shutter.
-- WebUSB page (`docs/test-page.html`) for desktop and Android: colour maps, auto and manual range with a temperature legend, spot readout, frame averaging, mirror and flip, saving the view as a PNG with its legend and settings, and the camera controls above.
+- WebUSB page (`webapp/picothermal-webusb.html`) for desktop and Android: colour maps, auto and manual range with a temperature legend, spot readout, frame averaging, mirror and flip, saving the view as a PNG with its legend and settings, and the camera controls above.

@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
-  WebUSB test page for the picothermal camera. WebUSB needs a secure context:
-  serve it over localhost (python -m http.server 8000 --directory docs) or
+  WebUSB web app for the picothermal camera. WebUSB needs a secure context:
+  serve it over localhost (python -m http.server 8000 --directory webapp) or
   HTTPS, then open it in Chrome or Edge, desktop or Android.
 
   The camera streams radiometric Y16 frames (TLinear, centikelvin). All colour
@@ -453,11 +453,27 @@ $('connect').onclick = async () => {
     for (const el of document.querySelectorAll('#gain, #calibrate, #emissivity, #material, [data-for=emissivity]')) el.disabled = false;
     if (camera.gain !== 0) sendGain();
     if (camera.emissivity !== 1) sendEmissivity();
+    keepAwake();
     stream();
   } catch (err) {
     $('stats').textContent = `connect failed: ${err.message}`;
   }
 };
+
+// A phone would otherwise dim and lock mid-stream, since watching the image
+// involves no touches. The browser drops the lock whenever the page is hidden,
+// so it has to be requested again on return.
+let wakeLock = null;
+async function keepAwake() {
+  if (!('wakeLock' in navigator) || wakeLock || document.visibilityState !== 'visible') return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+  } catch {
+    // Refused, e.g. battery saver on: the page still works, the screen just sleeps.
+  }
+}
+document.addEventListener('visibilitychange', () => { if ($('connect').hidden) keepAwake(); });
 
 async function stream() {
   for (;;) {
@@ -468,6 +484,7 @@ async function stream() {
       $('stats').textContent = `disconnected: ${err.message}`;
       $('connect').hidden = false;
       $('save').hidden = true;
+      wakeLock?.release();
       return;
     }
     if (result.status === 'ok' && result.data.byteLength >= HEADER_LEN) receive(result.data);

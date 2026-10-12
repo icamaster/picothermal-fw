@@ -53,7 +53,7 @@ jobs:
           elf=firmware/target/thumbv6m-none-eabi/release/firmware
           cp "$elf" "dist/picothermal-fw-$VERSION.elf"
           elf2uf2-rs "$elf" "dist/picothermal-fw-$VERSION.uf2"
-          cp docs/test-page.html dist/test-page.html
+          cp webapp/picothermal-webusb.html dist/picothermal-webusb.html
 
       # The release text is this version's section of CHANGELOG.md: everything
       # from its heading up to the next version's heading.
