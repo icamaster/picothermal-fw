@@ -140,6 +140,9 @@ pub enum Command {
     /// Set the scene emissivity used by radiometry, scaled so that 8192 is
     /// 1.0, the camera's own representation.
     SetEmissivity(u16),
+    /// Restart into the RP2040's ROM USB bootloader, which shows up as a drive
+    /// a `.uf2` firmware image can be copied onto.
+    RebootToBootloader,
 }
 
 impl Command {
@@ -159,6 +162,7 @@ impl Command {
             Self::SetGainMode(mode) => (0x02, mode as u16),
             Self::RunFfc => (0x03, 0),
             Self::SetEmissivity(scaled) => (0x04, scaled),
+            Self::RebootToBootloader => (0x05, 0),
         };
         let [low, high] = argument.to_le_bytes();
         [opcode, low, high]
@@ -179,6 +183,7 @@ impl Command {
             0x04 if (Self::EMISSIVITY_MIN..=Self::EMISSIVITY_ONE).contains(&argument) => {
                 Ok(Self::SetEmissivity(argument))
             }
+            0x05 => Ok(Self::RebootToBootloader),
             _ => Err(Error::BadValue),
         }
     }
@@ -419,6 +424,7 @@ mod tests {
             Command::SetEmissivity(Command::EMISSIVITY_MIN),
             Command::SetEmissivity(7782),
             Command::SetEmissivity(Command::EMISSIVITY_ONE),
+            Command::RebootToBootloader,
         ];
         for cmd in commands {
             assert_eq!(Command::from_bytes(&cmd.to_bytes()), Ok(cmd));

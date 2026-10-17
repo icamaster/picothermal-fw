@@ -215,7 +215,7 @@ async fn control(cci: &mut Cci<I2c<'_, I2C1, Async>, Delay>, settings: &mut Sett
                 match command {
                     Command::SetGainMode(mode) => settings.gain = mode,
                     Command::SetEmissivity(scaled) => settings.emissivity = scaled,
-                    Command::RunFfc | Command::SetPixelFormat(_) => {}
+                    Command::RunFfc | Command::SetPixelFormat(_) | Command::RebootToBootloader => {}
                 }
                 apply(cci, command).await;
             }
@@ -240,8 +240,8 @@ async fn apply(cci: &mut Cci<I2c<'_, I2C1, Async>, Delay>, command: Command) {
             FFC_ACTIVE.store(true, Ordering::Relaxed);
             cci.run_ffc().await
         }
-        // Handled on the USB side; it never reaches the camera.
-        Command::SetPixelFormat(_) => return,
+        // Handled on the USB side; they never reach the camera.
+        Command::SetPixelFormat(_) | Command::RebootToBootloader => return,
     };
     match result {
         Ok(()) => info!("camera: applied {}", defmt::Debug2Format(&command)),

@@ -193,6 +193,13 @@
         <span class="hint">also runs by itself every few minutes</span>
       </div>
     </div>
+    <div class="row">
+      <span class="label">Firmware</span>
+      <div class="ctl">
+        <button id="update" disabled>Update&hellip;</button>
+        <span class="hint">restarts the camera as a USB drive</span>
+      </div>
+    </div>
   </section>
 </main>
 
@@ -213,7 +220,7 @@ const FLAG_FFC = 1 << 0;
 const TICKS = 5;
 
 // Host commands: opcode, then a little-endian 16-bit argument.
-const CMD_SET_GAIN = 0x02, CMD_RUN_FFC = 0x03, CMD_SET_EMISSIVITY = 0x04;
+const CMD_SET_GAIN = 0x02, CMD_RUN_FFC = 0x03, CMD_SET_EMISSIVITY = 0x04, CMD_REBOOT_TO_BOOTLOADER = 0x05;
 const EMISSIVITY_ONE = 8192;  // the camera's fixed-point 1.0
 
 // Each palette is a list of evenly spaced colour stops, expanded into a
@@ -360,6 +367,23 @@ $('gain').onchange = () => {
 };
 $('calibrate').onclick = () => send(CMD_RUN_FFC);
 
+// Updating uses the RP2040's ROM bootloader rather than streaming the image
+// over WebUSB: the ROM cannot be overwritten, so a failed copy never leaves a
+// camera that cannot be updated again.
+const RELEASES = 'https://github.com/icamaster/picothermal-fw/releases/latest';
+$('update').onclick = async () => {
+  if (!confirm('Restart the camera into its USB bootloader to install new firmware? Streaming stops until the update is done.')) return;
+  await send(CMD_REBOOT_TO_BOOTLOADER);
+  showNotice(
+    '<h2>Install the new firmware</h2>' +
+      `<p>1. Download the <code>.uf2</code> file from the <a href="${RELEASES}" target="_blank" rel="noopener">latest release</a>.</p>` +
+      '<p>2. Copy it onto the <code>RPI-RP2</code> drive the camera now shows up as. The camera restarts by itself once the copy finishes.</p>' +
+      '<p>3. Press Connect again.</p>' +
+      '<p>No drive? On Android, only phones that support USB drives show it. If the camera is still streaming, its firmware predates this button: hold BOOTSEL while plugging it in instead.</p>',
+    false,
+  );
+};
+
 // Holding a stepper button repeats quickly; only the value it settles on needs
 // to reach the camera.
 let emissivityTimer;
@@ -466,7 +490,7 @@ $('connect').onclick = async () => {
     // with a camera streaming. Both swap back if the device disconnects.
     $('connect').hidden = true;
     $('save').hidden = false;
-    for (const el of document.querySelectorAll('#gain, #calibrate, #emissivity, #material, [data-for=emissivity]')) el.disabled = false;
+    for (const el of document.querySelectorAll('#gain, #calibrate, #update, #emissivity, #material, [data-for=emissivity]')) el.disabled = false;
     if (camera.gain !== 0) sendGain();
     if (camera.emissivity !== 1) sendEmissivity();
     keepAwake();

@@ -5,6 +5,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use defmt::{info, warn};
 use embassy_futures::select::{Either, select};
 use embassy_rp::peripherals::USB;
+use embassy_rp::rom_data;
 use embassy_rp::usb::{Driver, Endpoint, In, Out};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::zerocopy_channel::Receiver;
@@ -301,6 +302,13 @@ pub async fn commands(ep: &mut Endpoint<'_, USB, Out>) -> ! {
                 Ok(Command::SetPixelFormat(format)) => {
                     FORMAT.store(format as u8, Ordering::Relaxed);
                     info!("pixel format set to {}", format as u8);
+                }
+                Ok(Command::RebootToBootloader) => {
+                    info!("rebooting into the USB bootloader");
+                    // Does not return. Nothing needs shutting down first: the
+                    // ROM resets the whole chip, camera power pins included,
+                    // and nothing is written to flash at runtime.
+                    rom_data::reset_to_usb_boot(0, 0);
                 }
                 // Everything else is for the camera, whose bus this side does
                 // not own.

@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version lives in `firmware/Cargo.toml`; the firmware reports it to hosts as the USB device release number.
 
+## [Unreleased]
+
+### Added
+
+- WebUSB landing page: when the camera is plugged in, Chrome offers to open https://www.cezarchirila.com/webusb/picothermal.html.
+- Firmware update from the page: an Update button restarts the camera into the RP2040's USB bootloader, so a new `.uf2` can be copied onto it without holding BOOTSEL.
+- The page warns on load when the browser cannot use WebUSB, and on Linux shows the udev rule needed to connect.
+
 ## [0.1.0] - 2026-10-11
 
 Initial release.

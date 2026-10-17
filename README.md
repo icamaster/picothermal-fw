@@ -83,7 +83,7 @@ GitHub Actions runs `just check` on every push to `main` and every pull request.
 1. Bump `version` in `firmware/Cargo.toml` and add a matching section to `CHANGELOG.md`.
 2. Commit, then tag and push the tag: `git tag v0.1.0` and `git push origin v0.1.0`.
 
-The release workflow checks the tag matches the firmware version, builds the firmware, and publishes a GitHub release with that version's changelog section and three files: the `.elf` (for `probe-rs` or `just flash`), a `.uf2` (for drag-and-drop flashing through the RP2040's USB bootloader, which needs the board started with BOOTSEL held) and `picothermal-webusb.html`.
+The release workflow checks the tag matches the firmware version, builds the firmware, and publishes a GitHub release with that version's changelog section and three files: the `.elf` (for `probe-rs` or `just flash`), a `.uf2` (for drag-and-drop flashing through the RP2040's USB bootloader, entered with the page's Camera > Firmware > Update button, or by holding BOOTSEL while plugging the board in) and `picothermal-webusb.html`.
 
 ## License
 
