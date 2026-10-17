@@ -54,6 +54,14 @@
   .ctl { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
   .ctl label { display: inline-flex; gap: .3rem; align-items: center; }
   .hint { color: var(--muted); font-size: 12px; }
+
+  dialog { max-width: min(34rem, calc(100vw - 2rem)); box-sizing: border-box; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 1rem 1.25rem; }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
+  dialog p { margin: .5rem 0; line-height: 1.4; }
+  dialog a { color: inherit; }
+  dialog pre { background: #111; border: 1px solid var(--line); border-radius: 4px; padding: .5rem; overflow-x: auto; font-size: 12px; margin: .5rem 0; }
+  dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
 </style>
 </head>
 <body>
@@ -187,6 +195,14 @@
     </div>
   </section>
 </main>
+
+<dialog id="notice">
+  <div id="notice-body"></div>
+  <form method="dialog" class="actions">
+    <button id="notice-mute" value="mute" hidden>Don't show again</button>
+    <button value="close" autofocus>OK</button>
+  </form>
+</dialog>
 
 <script>
 const VID = 0x1209, PID = 0x0001;
@@ -688,6 +704,68 @@ function saveImage() {
   }, 'image/png');
 }
 $('save').onclick = saveImage;
+
+// Platform check on load. WebUSB is Chromium-only, and on Linux the browser can
+// list the camera yet fail to open it, because the device node is root-owned
+// until a udev rule grants it to the desktop user. Both look like a broken
+// camera, so say so before the user ever presses Connect.
+const README_PLATFORMS = 'https://github.com/icamaster/picothermal-fw#platforms';
+const LINUX_NOTICE_KEY = 'picothermal.hideLinuxNotice';
+
+function showNotice(html, mutable) {
+  const dialog = $('notice');
+  $('notice-body').innerHTML = html;
+  $('notice-mute').hidden = !mutable;
+  if (dialog.showModal) dialog.showModal(); else dialog.setAttribute('open', '');
+}
+
+function checkPlatform() {
+  const ua = navigator.userAgent;
+  // iPadOS reports itself as a Mac, so a touch screen gives it away.
+  const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+
+  if (!('usb' in navigator)) {
+    let why;
+    if (ios) {
+      why = 'Every browser on iPhone and iPad runs on Safari\'s engine, which does not implement WebUSB, and iOS does not let apps talk to USB devices like this camera.';
+    } else if (!window.isSecureContext) {
+      why = 'WebUSB only works on pages served over HTTPS or from localhost, and this page was opened some other way.';
+    } else {
+      why = 'This browser does not implement WebUSB. Use a Chromium-based browser such as Chrome, Edge, Opera or Brave, on Windows, macOS, Linux, ChromeOS or Android.';
+    }
+    showNotice(
+      `<h2>The camera won't work here</h2><p>${why}</p>` +
+        `<p>See <a href="${README_PLATFORMS}" target="_blank" rel="noopener">supported platforms</a> for the full list.</p>`,
+      false,
+    );
+    $('connect').disabled = true;
+    $('stats').textContent = 'WebUSB is not available in this browser';
+    return;
+  }
+
+  let hidden = false;
+  try { hidden = localStorage.getItem(LINUX_NOTICE_KEY) === '1'; } catch { /* storage blocked */ }
+  if (/Linux/.test(ua) && !/Android|CrOS/.test(ua) && !hidden) {
+    const hex = (n) => n.toString(16).padStart(4, '0');
+    const rule = `SUBSYSTEM=="usb", ATTR{idVendor}=="${hex(VID)}", ATTR{idProduct}=="${hex(PID)}", TAG+="uaccess"`;
+    showNotice(
+      '<h2>One-time setup on Linux</h2>' +
+        '<p>Linux only lets root open USB devices by default, so the browser can list the camera but fail to connect. ' +
+        'Allow it for your desktop user by creating <code>/etc/udev/rules.d/50-picothermal.rules</code> containing:</p>' +
+        `<pre>${rule}</pre>` +
+        '<p>Then unplug and replug the camera. Already done? Choose "Don\'t show again".</p>' +
+        `<p><a href="${README_PLATFORMS}" target="_blank" rel="noopener">More about supported platforms</a></p>`,
+      true,
+    );
+  }
+}
+
+$('notice').addEventListener('close', () => {
+  if ($('notice').returnValue === 'mute') {
+    try { localStorage.setItem(LINUX_NOTICE_KEY, '1'); } catch { /* storage blocked: it just shows again */ }
+  }
+});
+checkPlatform();
 </script>
 </body>
 </html>

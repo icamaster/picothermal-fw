@@ -15,6 +15,30 @@ Plug-and-play USB thermal camera: RP2040 + FLIR Lepton 3.5, embedded Rust firmwa
 
 Disclaimer: Everything below this line and the majority of this repository has been written by agents.
 
+## Platforms
+
+The web app needs WebUSB, which only Chromium-based browsers (Chrome, Edge, Opera, Brave, Vivaldi, Samsung Internet) implement.
+
+| Platform | Browser | Status |
+| --- | --- | --- |
+| Windows | Edge | Tested |
+| Android | Chrome | Tested |
+| Windows | Other Chromium browsers | Should work |
+| Android | Other Chromium browsers | Should work |
+| macOS | Chromium browsers | Should work |
+| ChromeOS | Chrome | Should work |
+| Linux | Chromium browsers | Should work, after adding the udev rule below |
+| Any | Firefox, Safari | Does not work: no WebUSB |
+| iPhone, iPad | Any | Does not work: every iOS browser uses Safari's engine |
+
+On Linux, normal users cannot open USB devices by default, so the browser lists the camera but fails to connect. Allow it once per machine with `/etc/udev/rules.d/50-picothermal.rules` containing:
+
+```
+SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="0001", TAG+="uaccess"
+```
+
+Then replug the camera. The IDs must match the ones in [USB identifiers](#usb-identifiers).
+
 ## Layout
 
 | Path | What it is |
