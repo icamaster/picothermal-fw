@@ -9,11 +9,12 @@ use embassy_rp::usb::{Driver, Endpoint, In, Out};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::zerocopy_channel::Receiver;
 use embassy_time::Timer;
+use embassy_usb::control::{InResponse, Recipient, Request, RequestType};
 use embassy_usb::descriptor::capability_type;
 use embassy_usb::driver::Endpoint as _;
 use embassy_usb::driver::{EndpointIn, EndpointOut};
 use embassy_usb::msos::{self, windows_version};
-use embassy_usb::{Builder, Config};
+use embassy_usb::{Builder, Config, Handler};
 use thermal_core::frame::{self, TestPattern};
 use thermal_core::protocol::{Command, FrameHeader, Packetizer, PixelFormat, usb_device_release};
 
@@ -39,6 +40,16 @@ const VENDOR_CODE: u8 = 0x01;
 /// machine has enumerated the device means clearing that machine's driver cache.
 const DEVICE_INTERFACE_GUID: &str = "{67A9617C-EDAF-43A2-9ED0-1D4D3A882660}";
 
+/// Page Chrome offers to open when the device is plugged in, without its
+/// `https://` prefix: the URL descriptor carries the scheme as a separate byte.
+const LANDING_PAGE: &str = "www.cezarchirila.com/webusb/picothermal.html";
+
+/// WebUSB URL descriptor for [`LANDING_PAGE`] (WebUSB spec 4.3.1).
+const LANDING_PAGE_DESCRIPTOR: [u8; 3 + LANDING_PAGE.len()] = url_descriptor();
+
+/// wIndex of the WebUSB GET_URL request (WebUSB spec 3.4).
+const GET_URL: u16 = 0x02;
+
 /// Streamed pixel format, owned here because the command loop writes it and the
 /// stream loop reads it. Only load and store are used: thumbv6m has no atomic
 /// compare-and-swap.
@@ -50,6 +61,7 @@ pub struct Buffers {
     bos_descriptor: [u8; 96],
     msos_descriptor: [u8; 256],
     control_buf: [u8; 64],
+    landing_page: LandingPage,
 }
 
 impl Default for Buffers {
@@ -66,8 +78,43 @@ impl Buffers {
             bos_descriptor: [0; 96],
             msos_descriptor: [0; 256],
             control_buf: [0; 64],
+            landing_page: LandingPage,
         }
     }
+}
+
+/// Answers the WebUSB GET_URL request for the landing page.
+///
+/// MS OS 2.0 shares the vendor code, but embassy answers that one itself
+/// (wIndex 7) before handlers are asked, so the two never collide.
+struct LandingPage;
+
+impl Handler for LandingPage {
+    fn control_in<'a>(&'a mut self, req: Request, _buf: &'a mut [u8]) -> Option<InResponse<'a>> {
+        let ours = req.request_type == RequestType::Vendor
+            && req.recipient == Recipient::Device
+            && req.request == VENDOR_CODE
+            && req.index == GET_URL
+            && req.value == 1;
+        ours.then_some(InResponse::Accepted(&LANDING_PAGE_DESCRIPTOR))
+    }
+}
+
+const fn url_descriptor() -> [u8; 3 + LANDING_PAGE.len()] {
+    const URL_DESCRIPTOR_TYPE: u8 = 0x03;
+    const SCHEME_HTTPS: u8 = 0x01;
+
+    let url = LANDING_PAGE.as_bytes();
+    let mut desc = [0; 3 + LANDING_PAGE.len()];
+    desc[0] = desc.len() as u8;
+    desc[1] = URL_DESCRIPTOR_TYPE;
+    desc[2] = SCHEME_HTTPS;
+    let mut i = 0;
+    while i < url.len() {
+        desc[3 + i] = url[i];
+        i += 1;
+    }
+    desc
 }
 
 /// The endpoints the streaming and command loops run on.
@@ -99,6 +146,7 @@ pub fn build<'d>(
         &mut buffers.msos_descriptor,
         &mut buffers.control_buf,
     );
+    builder.handler(&mut buffers.landing_page);
 
     // Without these two, Windows leaves the device unbound and the browser
     // cannot open it: WINUSB selects the driver, and the GUID is what WinUSB
@@ -128,8 +176,9 @@ pub fn build<'d>(
             // PlatformCapabilityUUID from the WebUSB spec.
             0x00, 0x38, 0xb6, 0x08, 0x34, 0xa9, 0x09, 0xa0,
             0x47, 0x8b, 0xfd, 0xa0, 0x76, 0x88, 0x15, 0xb6, 0x65,
-            // bcdVersion 1.0, the vendor code, and iLandingPage 0 (none).
-            0x00, 0x01, VENDOR_CODE, 0x00,
+            // bcdVersion 1.0, the vendor code, and iLandingPage, the value
+            // GET_URL is asked for to fetch LANDING_PAGE.
+            0x00, 0x01, VENDOR_CODE, 0x01,
         ],
     );
 
