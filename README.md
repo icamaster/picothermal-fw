@@ -64,6 +64,7 @@ Works the same on Windows and Linux. You need:
 | `just build` | Cross-compile the firmware |
 | `just run` | Flash via SWD probe and stream defmt logs (RTT) |
 | `just flash` | Flash via SWD probe and leave it running, without logs |
+| `just clean` | Delete build output, host and firmware |
 | `just check` | Everything CI would run: format check, lint, test, build |
 
 ## USB identifiers

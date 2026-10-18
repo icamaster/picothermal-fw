@@ -50,5 +50,10 @@ run:
 flash:
     cargo flash --manifest-path firmware/Cargo.toml --target {{firmware_target}} --release --chip RP2040
 
+# Delete build output (host crates + firmware)
+clean:
+    cargo clean
+    cargo clean --manifest-path firmware/Cargo.toml
+
 # Everything CI would check: formatting, lints, tests, firmware build
 check: fmt-check lint test build
