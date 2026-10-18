@@ -53,6 +53,7 @@ Works the same on Windows and Linux. You need:
 1. [rustup](https://rustup.rs) - the pinned stable toolchain and the `thumbv6m-none-eabi` target install automatically on first build.
 2. [just](https://github.com/casey/just) - task runner: `winget install Casey.Just` or `cargo install just`.
 3. [probe-rs](https://probe.rs/docs/getting-started/installation/) - only needed to flash/debug real hardware over SWD: `cargo install probe-rs-tools`.
+4. [elf2uf2-rs](https://github.com/JoNil/elf2uf2-rs) - only needed for `just build-uf2`: `cargo install elf2uf2-rs --locked` (on Linux, install `libudev-dev` first).
 
 ## Commands
 
@@ -62,8 +63,10 @@ Works the same on Windows and Linux. You need:
 | `just lint` | Clippy on host crates and firmware, warnings are errors |
 | `just test` | Host-side tests (driver + protocol, no hardware needed) |
 | `just build` | Cross-compile the firmware |
+| `just build-uf2` | Release build, converted to `firmware/target/thumbv6m-none-eabi/release/firmware.uf2` for drag-and-drop flashing |
 | `just run` | Flash via SWD probe and stream defmt logs (RTT) |
 | `just flash` | Flash via SWD probe and leave it running, without logs |
+| `just serve` | Serve the web app at http://localhost:8000 (needs Python 3) |
 | `just clean` | Delete build output, host and firmware |
 | `just check` | Everything CI would run: format check, lint, test, build |
 

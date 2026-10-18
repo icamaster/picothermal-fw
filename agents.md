@@ -37,7 +37,7 @@ Library code stays in one crate. Do not add new lib crates without asking - the 
 
 ## Commands (`just`)
 
-`fmt`, `fmt-check`, `lint` (clippy, `-D warnings`), `test` (host only), `build` / `build-release`, `run` (flash over SWD and stream defmt), `flash` (flash over SWD only, no logs), `clean` (host and firmware build output), `check` (everything CI runs).
+`fmt`, `fmt-check`, `lint` (clippy, `-D warnings`), `test` (host only), `build` / `build-release`, `build-uf2` (release build as a `.uf2`, needs `elf2uf2-rs`), `run` (flash over SWD and stream defmt), `flash` (flash over SWD only, no logs), `clean` (host and firmware build output), `serve` (the web app on localhost, needs Python 3), `check` (everything CI runs).
 
 Recipes are direct program invocations only - no shell pipelines, no bash or PowerShell scripts (`windows-shell := ["cmd.exe", "/c"]`). Non-trivial logic belongs in a Rust `xtask`, not a script.
 

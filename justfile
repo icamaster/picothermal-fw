@@ -5,6 +5,9 @@ set windows-shell := ["cmd.exe", "/c"]
 
 firmware_target := "thumbv6m-none-eabi"
 
+# Debian and Ubuntu ship only `python3`; the python.org Windows installer has no `python3`.
+python := if os_family() == "windows" { "python" } else { "python3" }
+
 # defmt filters log levels at COMPILE time via DEFMT_LOG. Exporting it here
 # guarantees it reaches the compiler for every recipe; relying on
 # firmware/.cargo/config.toml's [env] fails because cargo only reads that file
@@ -42,6 +45,10 @@ build:
 build-release:
     cargo build --manifest-path firmware/Cargo.toml --target {{firmware_target}} --release
 
+# Build the release firmware as a .uf2 for drag-and-drop flashing (requires elf2uf2-rs)
+build-uf2: build-release
+    elf2uf2-rs firmware/target/{{firmware_target}}/release/firmware firmware/target/{{firmware_target}}/release/firmware.uf2
+
 # Flash and run firmware with defmt logging over SWD (requires probe-rs)
 run:
     cargo run --manifest-path firmware/Cargo.toml --target {{firmware_target}} --release
@@ -49,6 +56,10 @@ run:
 # Flash the release firmware over SWD and leave it running, without logging
 flash:
     cargo flash --manifest-path firmware/Cargo.toml --target {{firmware_target}} --release --chip RP2040
+
+# Serve the web app at http://localhost:8000 (requires Python 3)
+serve:
+    {{python}} -m http.server 8000 --bind 127.0.0.1 --directory webapp
 
 # Delete build output (host crates + firmware)
 clean:
