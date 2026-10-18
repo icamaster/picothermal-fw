@@ -6,7 +6,6 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- WebUSB landing page: when the camera is plugged in, Chrome offers to open https://www.cezarchirila.com/webusb/picothermal.html.
 - Firmware update from the page: an Update button restarts the camera into the RP2040's USB bootloader, so a new `.uf2` can be copied onto it without holding BOOTSEL.
 - The page warns on load when the browser cannot use WebUSB, and on Linux shows the udev rule needed to connect.
 
